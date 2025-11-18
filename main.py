@@ -3,7 +3,7 @@ import logging
 import os
 from dotenv import load_dotenv
 
-from manager_bot import (
+from applicant_bot import (
     create_manager_application, 
     ai_task_queue, 
     start_command, 
@@ -52,7 +52,7 @@ async def _show_manager_menu_on_start(update, context: ContextTypes.DEFAULT_TYPE
         # Show the bottom menu keyboard
         await update.effective_message.reply_text(WELCOME_TEXT_WHEN_STARTING_BOT, reply_markup=MANAGER_MENU_KB)
 
-        # Call the main start_command from manager_bot
+        # Call the main start_command from applicant_bot
         await start_command(update, context)
 
 

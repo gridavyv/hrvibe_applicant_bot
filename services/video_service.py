@@ -101,8 +101,8 @@ async def process_incoming_video(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["pending_file_size"] = file_size
 
 
-    # Local import to avoid circular dependency with manager_bot
-    from manager_bot import ask_confirm_sending_video_command
+    # Local import to avoid circular dependency with applicant_bot
+    from applicant_bot import ask_confirm_sending_video_command
 
     await ask_confirm_sending_video_command(update, context)
 
@@ -148,7 +148,7 @@ async def download_incoming_video_locally(update: Update, context: ContextTypes.
         if video_file_path.exists():
             logger.debug(f"Video file created successfully: {video_file_path}")
 
-            from manager_bot import read_vacancy_description_command
+            from applicant_bot import read_vacancy_description_command
 
             # ----- READ VACANCY DESCRIPTION -----
 
