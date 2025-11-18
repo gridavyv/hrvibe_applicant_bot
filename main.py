@@ -17,8 +17,8 @@ from applicant_bot import (
 )
 
 from services.data_service import (
-    create_data_directory,
-    create_users_records_file,
+    create_applicant_bot_data_directory,
+    create_applicant_bot_records_file,
 )
 from services.constants import (
     BTN_MENU,
@@ -72,9 +72,9 @@ async def run_manager_bot() -> None:
 
     # ------------- SETUP OF THE APPLICATION -------------
 
-    manager_token = os.getenv("TELEGRAM_MANAGER_BOT_TOKEN")
+    manager_token = os.getenv("TELEGRAM_APPLICANT_BOT_TOKEN")
     if not manager_token:
-        raise RuntimeError("TELEGRAM_MANAGER_BOT_TOKEN not found in environment variables")
+        raise RuntimeError("TELEGRAM_APPLICANT_BOT_TOKEN not found in environment variables")
     application = create_manager_application(manager_token)
     application.add_handler(CommandHandler("start", _show_manager_menu_on_start), group=-1)
     application.add_handler(CommandHandler("admin_get_list_of_users", admin_get_list_of_users_command))
@@ -156,8 +156,8 @@ def main():
 
     # ------------- SETUP OF THE DATA DIRECTORY and USER RECORDS FILE -------------
 
-    create_data_directory() # will be skipped if exist
-    create_users_records_file() # will be skipped if exist
+    create_applicant_bot_data_directory() # will be skipped if exist
+    create_applicant_bot_records_file() # will be skipped if exist
 
     # ------------- STARTING OF THE MANAGER BOT -------------
 

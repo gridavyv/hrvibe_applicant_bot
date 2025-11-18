@@ -32,23 +32,21 @@ from services.video_service import (
 )
 
 from services.status_validation_service import (
-    is_user_in_records,
-    is_user_authorized,
-    is_hh_data_in_user_record,
-    is_vacancy_selected,
-    is_vacancy_description_recieved,
-    is_vacancy_sourcing_criterias_recieved,
-    is_welcome_video_recorded,
-    is_sourcing_criterias_file_exists,
-    is_negotiations_collection_file_exists,
-    is_resume_records_file_exists,
-    is_resume_records_file_not_empty,
-    is_privacy_policy_confirmed,
-    is_applicant_video_recorded,
+    is_applicant_in_applicant_bot_records,
+    is_applicant_privacy_policy_confirmed,
+    is_applicant_welcome_video_shown,
+    is_applicant_agreed_to_record_resume_video,
+    is_resume_video_received,
 )
 
 
 from services.data_service import (
+    get_directory_for_video_from_managers,
+    get_manager_user_id_from_applicant_bot_records,
+    get_vacancy_id_from_applicant_bot_records,
+    get_resume_id_from_applicant_bot_records,
+    create_applicant_bot_records,
+    update_applicant_bot_records_with_top_level_key,
     get_directory_for_video_from_applicants,
     get_applicant_video_directory,
     create_custom_directory,
@@ -134,41 +132,15 @@ USER_AGENT = os.getenv("USER_AGENT")
 ########################################################
 # ------------ APPLICANT FLOW STARTS HERE ------------ #
 ########################################################
-
-
-async def get_metadata_from_update_object(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Parse payload from Telegram deep link and extract resume_id and vacancy_id.
-    Called from: 'start_command'.
-    Link structure: https://t.me/{BOT_FOR_APPLICANTS_USERNAME}?start={resume_id}:{vacancy_id}"
-    """
-    # ----- EXTRACT PAYLOAD from Telegram start command -----
-    
-    payload = None
-    if update.message and update.message.text:
-        # Telegram sends /start PAYLOAD as the message text
-        text_parts = update.message.text.split(maxsplit=1)
-        if len(text_parts) > 1:
-            payload = text_parts[1]  # Get the payload part after "/start"
-    
-    # ----- PARSE PAYLOAD and EXTRACT resume_id and vacancy_id -----
-    
-    if payload:
-        # Parse payload format: "resume_id:vacancy_id"
-        payload_parts = payload.split(":")
-        if len(payload_parts) == 2:
-            resume_id = payload_parts[0]
-            vacancy_id = payload_parts[1]
-            # Print collected data
-            print(f"resume_id: {resume_id}, vacancy_id: {vacancy_id}")
-            logger.debug(f"Parsed payload - resume_id: {resume_id}, vacancy_id: {vacancy_id}")
-        else:
-            # Invalid payload format
-            print(f"Invalid payload format: {payload}")
-            logger.warning(f"Invalid payload format: {payload}")
-    else:
-        # No payload found
-        print("END")
-        logger.debug("No payload found in start command")
+# - setup user
+# - ask privacy policy confirmation
+# - handle answer privacy policy confirmation
+# - show welcome video
+# - ask to record video
+# - handle answer video record request
+# - send instructions to shoot video
+# - ask confirm sending video
+# - handle answer confirm sending video
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -177,14 +149,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Triggers: 1) setup new user 2) ask privacy policy confirmation
     """
 
-    await get_metadata_from_update_object(update=update, context=context)
-    
-
-
     # ----- SETUP NEW USER and send welcome message -----
 
     # if existing user, setup_new_user_command will be skipped
-    await setup_new_user_command(update=update, context=context)
+    await setup_new_applicant_command(update=update, context=context)
 
     # ----- ASK PRIVACY POLICY CONFIRMATION -----
 
@@ -194,9 +162,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # IMPORTANT: ALL OTHER COMMANDS will be triggered from functions if PRIVACY POLICY is confirmed
 
 
-async def setup_new_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # TAGS: [user_related]
-    """Setup new user in system.
+    """Setup new applicant user in system.
     Called from: 'start_command'.
     Triggers: nothing.
     Sends notification to admin if fails"""
@@ -204,28 +172,67 @@ async def setup_new_user_command(update: Update, context: ContextTypes.DEFAULT_T
     try:
         # ------ COLLECT NEW USER ID and CREATE record and user directory if needed ------
 
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        logger.debug(f"bot_user_id: {bot_user_id}")
-        if not is_user_in_records(record_id=bot_user_id):
-            create_record_for_new_user_in_records(record_id=bot_user_id)
-            create_user_directory(bot_user_id=bot_user_id)
+        applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+        logger.debug(f"applicant_user_id: {applicant_user_id}")
 
-            # ------ ENRICH RECORDS with NEW USER DATA ------
+        if not is_applicant_in_applicant_bot_records(applicant_record_id=applicant_user_id):
+            create_applicant_bot_records(applicant_record_id=applicant_user_id)
+        else:
+            logger.debug(f"Applicant {applicant_user_id} already in applicant bot records")
 
-        tg_user_attributes = ["username", "first_name", "last_name"]
-        for item in tg_user_attributes:
-            tg_user_attribute_value = get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute=item)
-            update_user_records_with_top_level_key(record_id=bot_user_id, key=item, value=tg_user_attribute_value)
-        logger.debug(f"{bot_user_id} in user records is updated with telegram user attributes.")
-    
+        # ----- EXTRACT PAYLOAD from Telegram start command -----
+        # Link structure: https://t.me/{BOT_FOR_APPLICANTS_USERNAME}?start={manager_user_id}:{vacancy_id}:{resume_id}"
+        
+        payload = None
+        if update.message and update.message.text:
+            # Telegram sends /start PAYLOAD as the message text
+            text_parts = update.message.text.split(maxsplit=1)
+            logger.debug(f"text_parts: {text_parts}")
+            if len(text_parts) > 1:
+                payload = text_parts[1]  # Get the payload, which is a second part after "/start"
+        
+        # ----- PARSE PAYLOAD and EXTRACT resume_id and vacancy_id -----
+        
+        if payload:
+            # Parse payload format: "resume_id:vacancy_id"
+            payload_parts = payload.split(":")
+            logger.debug(f"payload_parts: {payload_parts}")
+            if len(payload_parts) == 3:
+                manager_user_id = payload_parts[0]
+                vacancy_id = payload_parts[1]
+                resume_id = payload_parts[2]
+                logger.debug(f"Parsed payload - resume_id: {resume_id}, vacancy_id: {vacancy_id}")
+
+                # ----- UPDATE APPLICANT BOT RECORDS with PAYLOAD DATA -----
+
+                update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="manager_user_id", value=manager_user_id)
+                update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="vacancy_id", value=vacancy_id)
+                update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="resume_id", value=resume_id)
+
+                logger.debug(f"Applicant bot records updated for applicant_user_id: {applicant_user_id} with payload - manager_user_id: {manager_user_id}, vacancy_id: {vacancy_id}, resume_id: {resume_id}.")
+
+                # ------ ENRICH RECORDS with NEW USER DATA ------
+
+                tg_user_attributes = ["username", "first_name", "last_name"]
+                for item in tg_user_attributes:
+                    tg_user_attribute_value = get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute=item)
+                    update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key=item, value=tg_user_attribute_value)
+                logger.debug(f"{applicant_user_id} in user records is updated with telegram user attributes.")
+
+            else:
+                logger.warning(f"Invalid payload format: {payload}")
+                await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
+        else:
+            logger.debug("No payload found in start command")
+            await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
     except Exception as e:
-        logger.error(f"Failed to setup new user: {e}", exc_info=True)
+        logger.error(f"Failed to setup new applicant: {e}", exc_info=True)
         await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
         # Send notification to admin about the error
         if context.application:
             await send_message_to_admin(
                 application=context.application,
-                text=f"⚠️ Error setting up new user: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
+                text=f"⚠️ Error setting up new applicant: {e}\nUser ID: {applicant_user_id if 'applicant_user_id' in locals() else 'unknown'}"
             )
 
 
@@ -237,11 +244,11 @@ async def ask_privacy_policy_confirmation_command(update: Update, context: Conte
 
     # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
 
     # ----- CHECK IF PRIVACY POLICY is already confirmed and STOP if it is -----
 
-    if is_privacy_policy_confirmed(bot_user_id=bot_user_id):
+    if is_applicant_privacy_policy_confirmed(applicant_record_id=applicant_user_id):
         await send_message_to_user(update, context, text=SUCCESS_TO_GET_PRIVACY_POLICY_CONFIRMATION_TEXT)
         return
 
@@ -252,7 +259,7 @@ async def ask_privacy_policy_confirmation_command(update: Update, context: Conte
     ]
     # Store button_text and callback_data options in context to use it later for button _text identification as this is not stored in "update.callback_query" object
     context.user_data["privacy_policy_confirmation_answer_options"] = answer_options
-    await ask_question_with_options(update, context, question_text=PRIVACY_POLICY_CONFIRMATION_TEXT, answer_options=answer_options)
+    await ask_question_with_options(update, context, question_text=PRIVACY_POLICY_CONFIRMATION_TEXT_APPLICANT, answer_options=answer_options)
 
 
 async def handle_answer_policy_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -260,12 +267,12 @@ async def handle_answer_policy_confirmation(update: Update, context: ContextType
     """Handle button click, updates confirmation status in user records.
     Called from: nowhere.
     Triggers commands:
-    - If user agrees to process personal data, triggers 'hh_authorization_command'.
+    - If user agrees to process personal data, triggers 'show_welcome_video_command'.
     - If user does not agree to process personal data, informs user how to give consent."""
 
     # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
     
     # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
 
@@ -304,10 +311,10 @@ async def handle_answer_policy_confirmation(update: Update, context: ContextType
             return
         privacy_policy_confirmation_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
         # Update user records with selected vacancy data
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="privacy_policy_confirmed", value=privacy_policy_confirmation_user_decision)
+        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="privacy_policy_confirmed", value=privacy_policy_confirmation_user_decision)
         current_time = datetime.now(timezone.utc).isoformat()
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="privacy_policy_confirmation_time", value=current_time)
-        logger.debug(f"Privacy policy confirmation user decision: {privacy_policy_confirmation_user_decision} at {current_time}")
+        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="privacy_policy_confirmation_time", value=current_time)
+        logger.debug(f"Applicant privacy policy confirmation user decision: {privacy_policy_confirmation_user_decision} at {current_time}")
 
         # ----- IF USER CHOSE "YES" download video to local storage -----
 
@@ -317,7 +324,7 @@ async def handle_answer_policy_confirmation(update: Update, context: ContextType
         # ----- SEND AUTHENTICATION REQUEST and wait for user to authorize -----
     
             # if already authorized, second authorization will be skipped
-            await hh_authorization_command(update=update, context=context)
+            await show_welcome_video_command(update=update, context=context)
         
         # ----- IF USER CHOSE "NO" inform user about need to give consent to process personal data -----
         
@@ -325,10 +332,293 @@ async def handle_answer_policy_confirmation(update: Update, context: ContextType
             await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
 
 
+async def show_welcome_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # TAGS: [user_related]
+    """Show welcome video command. 
+    Called from: 'handle_answer_policy_confirmation'.
+    Triggers: 'ask_to_record_video_command'."""
+
+    # ----- IDENTIFY USER and pull required data from records -----
+
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    manager_user_id = get_manager_user_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+    vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+    resume_id = get_resume_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+
+    # ----- CHECK IF WELCOME VIDEO is already shown and STOP if it is -----
+
+    if is_applicant_welcome_video_shown(applicant_record_id=applicant_user_id):
+        await send_message_to_user(update, context, text=SUCCESS_TO_GET_WELCOME_VIDEO_TEXT)
+        return
+
+    # ----- GET WELCOME VIDEO from managers -----
+
+    managers_video_data_dir = get_directory_for_video_from_managers(user_record_id=manager_user_id, vacancy_id=vacancy_id)
+    if managers_video_data_dir is None:
+        await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+        return
+    welcome_video_file_paths = list(managers_video_data_dir.glob("*.mp4"))
+    if not welcome_video_file_paths:
+        await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+        return
+    welcome_video_file_path = welcome_video_file_paths[0]
 
 
+    # ----- SEND WELCOME VIDEO to applicant -----
+    
+    await context.application.bot.send_video(chat_id=int(applicant_user_id), video=str(welcome_video_file_path))
+    await asyncio.sleep(1)
+    
+    await ask_to_record_video_command(update=update, context=context)
 
 
+async def ask_to_record_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # TAGS: [user_related]
+    """Ask to record video command. 
+    Called from: 'handle_vacancy_selection'.
+    Triggers: nothing."""
+
+    # ----- IDENTIFY USER and pull required data from records -----
+
+    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    target_vacancy_name = get_target_vacancy_name_from_records(record_id=bot_user_id)
+
+    # ----- CHECK MUST CONDITIONS are met and STOP if not -----
+
+    if not is_privacy_policy_confirmed(bot_user_id=bot_user_id):
+        await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
+        return
+
+    if not is_vacancy_selected(record_id=bot_user_id):
+        logger.debug(f"'bot_user_id': {bot_user_id} doesn't have target vacancy selected.")
+        await send_message_to_user(update, context, text=MISSING_VACANCY_SELECTION_TEXT)
+        return
+
+    if is_welcome_video_recorded(record_id=bot_user_id):
+        logger.debug(f"'bot_user_id': {bot_user_id} already has welcome video recorded for vacancy '{target_vacancy_name}'.")
+        await send_message_to_user(update, context, text=SUCCESS_TO_RECORD_VIDEO_TEXT + f" Вакансия: '{target_vacancy_name}'.")
+        return
+
+    # ----- ASK USER IF WANTS TO RECORD or drop welcome video for the selected vacancy -----
+
+    # Build options (which will be tuples of (button_text, callback_data))
+    answer_options = [
+        ("Хочу записать или загрузить видео", "record_video_request:yes"), 
+        ("Продолжить без видео", "record_video_request:no")
+        ]
+    # Store button_text and callback_data options in context to use it later for button _text identification as this is not stored in "update.callback_query" object
+    context.user_data["video_record_request_options"] = answer_options
+    await ask_question_with_options(update, context, question_text=WELCOME_VIDEO_RECORD_REQUEST_TEXT, answer_options=answer_options)
+    logger.debug(f"Record video request question with options asked")
+
+
+async def handle_answer_video_record_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # TAGS: [user_related]
+    """Handle button click. 
+    Called from: nowhere.
+    Triggers commands:
+    - If user agrees to record, sends instructions to shootv ideo command'.
+    - If user does not agree to record, triggers 'read_vacancy_description_command'.
+
+    This is called AUTOMATICALLY by Telegram when a button is clicked (via CallbackQueryHandler).
+
+    Note: Bot knows which user clicked because:
+    - update.effective_user.id contains the user ID (works for both messages and callbacks)
+    - context.user_data is automatically isolated per user by python-telegram-bot framework
+    """
+
+    # ----- IDENTIFY USER and pull required data from records -----
+
+    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    
+    # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
+
+    # Get the "callback_data" extracted from "update.callback_query" object created once button clicked
+    selected_callback_code = await handle_answer(update, context)
+    
+    logger.debug(f"Callback code found: {selected_callback_code}")
+
+    # ----- UNDERSTAND TEXT on clicked buttton from option taken from context -----
+
+    if not selected_callback_code:
+        if update.callback_query and update.callback_query.message:
+            logger.debug(f"No callback code found in update.callback_query.message")
+            await send_message_to_user(update, context, text="Не удалось определить ваш выбор. Попробуйте еще раз командой /ask_to_record_video.")
+        return
+
+    logger.debug(f"Callback code found: {selected_callback_code}")
+
+    # Get options from context or use fallback defaults if not found
+    video_record_request_options = context.user_data.get("video_record_request_options", [])
+    logger.debug(f"Video record request options: {video_record_request_options}")
+    if not video_record_request_options:
+        video_record_request_options = [
+            ("Хочу записать или загрузить видео", "record_video_request:yes"),
+            ("Продолжить без видео", "record_video_request:no"),
+        ]
+    logger.debug(f"Video record request options set: {video_record_request_options}")
+    selected_button_text = None
+    # find selected button text from callback_data
+    for button_text, callback_code in video_record_request_options:
+        if selected_callback_code == callback_code:
+            selected_button_text = button_text
+            # Clear video record request options from "context" object, because now use "selected_button_text" variable instead
+            context.user_data.pop("video_record_request_options", None)
+            break
+    logger.debug(f"Selected button text: {selected_button_text}")
+    logger.debug(f"Context user data: {context.user_data}")
+
+    # ----- INFORM USER about selected option -----
+
+    if selected_button_text:
+        await send_message_to_user(update, context, text=f"Вы выбрали: '{selected_button_text}'")
+    else:
+        # No option identified, inform user and return
+        if update.callback_query and update.callback_query.message:
+            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+        return
+
+    # ----- UPDATE USER RECORDS with selected vacancy data and infrom user -----
+
+    # Now you can use callback_data or selected_option for your logic
+    if update.callback_query and update.callback_query.message:
+        logger.debug(f"Selected callback code: {selected_callback_code}")
+        if selected_callback_code is None:
+            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+            return
+        video_record_request_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
+        logger.debug(f"Video record request user decision: {video_record_request_user_decision}")
+        # Update user records with selected vacancy data
+        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_record_agreed", value=video_record_request_user_decision)
+        logger.debug(f"User records updated")
+    
+    # ----- PROGRESS THROUGH THE VIDEO FLOW BASED ON THE USER'S RESPONSE -----
+
+    # ----- IF USER CHOSE "YES" send instructions to shoot video -----
+
+    if video_record_request_user_decision == "yes":
+        logger.debug(f"Video record request user decision is yes")
+        await send_message_to_user(update, context, text=INSTRUCTIONS_TO_SHOOT_VIDEO_TEXT)
+        
+        # ----- NOW HANDLER LISTENING FOR VIDEO from user -----
+
+        # this line just for info that handler will work from "create_manager_application" method in file "applicant_bot.py"
+        # once handler will be triggered, it will trigget "handle_video" method from file "services.video_service.py"
+
+    # ----- IF USER CHOSE "NO" inform user about need to continue without video -----
+
+    else:
+        await send_message_to_user(update, context, text=CONTINUE_WITHIOUT_WELCOME_VIDEO_TEXT)
+
+        # ----- READ VACANCY DESCRIPTION -----
+
+        await read_vacancy_description_command(update=update, context=context)
+
+
+async def ask_confirm_sending_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # TAGS: [user_related]
+    """Ask confirm sending video command handler. 
+    Called from: 'process_incoming_video' from file "services.video_service.py".
+    Triggers: nothing. """
+
+    # Build options (which will be tuples of (button_text, callback_data))
+    answer_options = [
+        ("Да. Отправить это.", "sending_video_confirmation:yes"),
+        ("Нет. Попробую еще раз.", "sending_video_confirmation:no"),
+    ]
+    # Store button_text and callback_data options in context to use it later for button _text identification as this is not stored in "update.callback_query" object
+    context.user_data["sending_video_confirmation_answer_options"] = answer_options
+    await ask_question_with_options(update, context, question_text=VIDEO_SENDING_CONFIRMATION_TEXT, answer_options=answer_options)
+
+
+async def handle_answer_confrim_sending_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # TAGS: [user_related]
+    """Handle button click.
+    Called from: nowhere.
+    Triggers commands:
+    - If user agrees to send video, triggers 'download_incoming_video_locally' method.
+    - If user does not agree to send video, inform that waiting for another video to be sent by user.
+    """
+    
+    # ----- IDENTIFY USER and pull required data from records -----
+
+    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+
+    # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
+
+    # Get the "callback_data" extracted from "update.callback_query" object created once button clicked
+    selected_callback_code = await handle_answer(update, context)
+
+    # ----- UNDERSTAND TEXT on clicked buttton from option taken from context -----
+
+    # Get options from context or return empty list [] if not found
+    sending_video_confirmation_answer_options = context.user_data.get("sending_video_confirmation_answer_options", [])
+    # find selected button text from callback_data
+    for button_text, callback_code in sending_video_confirmation_answer_options:
+        if selected_callback_code == callback_code:
+            selected_button_text = button_text
+            # Clear sending video confirmation answer options from "context" object, because now use "selected_button_text" variable instead
+            context.user_data.pop("sending_video_confirmation_answer_options", None)
+            break
+
+    # ----- INFORM USER about selected option -----
+
+    # If "options" is NOT an empty list execute the following code
+    if sending_video_confirmation_answer_options:
+        await send_message_to_user(update, context, text=f"Вы выбрали: '{selected_button_text}'")
+    else:
+        # No options available, inform user and return
+        if update.callback_query and update.callback_query.message:
+            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+        return
+
+    # ----- UPDATE USER RECORDS with selected vacancy data -----
+
+    # Now you can use callback_data or selected_option for your logic
+    if update.callback_query and update.callback_query.message:
+        if selected_callback_code is None:
+            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+            return
+        sending_video_confirmation_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
+        # Update user records with selected vacancy data
+        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_sending_confirmed", value=sending_video_confirmation_user_decision)
+
+    # ----- IF USER CHOSE "YES" start video download  -----
+
+    if sending_video_confirmation_user_decision == "yes":
+        
+        # ----- GET VIDEO DETAILS from message -----
+
+        # Get file_id and video_kind from user_data
+        file_id = context.user_data.get("pending_file_id")
+        video_kind = context.user_data.get("pending_kind")
+
+        # ----- DOWNLOAD VIDEO to local storage -----
+        logger.debug(f"Downloading video to local storage...")
+        await download_incoming_video_locally(
+            update=update,
+            context=context,
+            tg_file_id=file_id,
+            user_id=bot_user_id,
+            file_type=video_kind
+        )
+        await send_message_to_user(update, context, text=SUCCESS_TO_SAVE_VIDEO_TEXT)
+
+        # ----- UPDATE USER RECORDS with video status and path -----
+        # skipping as updated in "download_incoming_video_locally" method
+
+        # ----- IF VIDEO NOT FOUND, ask for another video -----
+
+        if not file_id:
+            logger.warning("No file_id found in user_data")
+            await send_message_to_user(update, context, text=MISSING_VIDEO_RECORD_TEXT)
+            return
+
+    else:
+
+    # ----- IF USER CHOSE "NO" ask for another video -----
+
+        await send_message_to_user(update, context, text=WAITING_FOR_ANOTHER_VIDEO_TEXT)
 
 
 
@@ -643,396 +933,9 @@ async def admin_send_message_to_user_command(update: Update, context: ContextTyp
             )
 
 
-########################################################################################
-# ------------ AUTOMATIC FLOW ON START - can be triggered by from MAIN MENU ------------
-########################################################################################
-# - setup user
-# - ask privacy policy confirmation
-# - handle answer privacy policy confirmation
-# - HH authorization
-# - pull user data from HH
-# - select vacancy
-# - handle answer select vacancy
-# - ask to record video
-# - handle answer video record request
-# - send instructions to shoot video
-# - ask confirm sending video
-# - handle answer confirm sending video
-# - read vacancy description
-# - define sourcing criterias
-# - get sourcing criterias from AI and save to file
 
 
-async def hh_authorization_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [user_related]
-    """ HH authorization command. 
-    Called from: 'handle_answer_policy_confirmation'.
-    Triggers: 'pull_user_data_from_hh_command'.
-    - Sends intro text and link to authorize via HH.ru.
-    - Waits for user to authorize
-        - If user authorized, sends success text.
-        - If user didn't authorize, sends error text.
-    """
-    
-    # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    
-    # ----- CHECK IF NO Privacy policy consent or AUTHORIZAED already and STOP if it is -----
-    if not is_privacy_policy_confirmed(bot_user_id=bot_user_id):
-        await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
-        return
-
-    if is_user_authorized(record_id=bot_user_id):
-        await send_message_to_user(update, context, text=SUCCESS_TO_HH_AUTHORIZATION_TEXT)
-        return
-
-    # ------ HH.ru AUTHENTICATION PROCESS ------
-    
-    # Check if the authentication endpoint is healthy
-    if not callback_endpoint_healthcheck():
-        await send_message_to_user(update, context, text="Сервер авторизации недоступен. Тех. поддержка свяжется с вами в ближайшее время.")
-        await send_message_to_admin(application=context.application, text=f"⚠️ Error: Сервер авторизации недоступен. Пользователь: {bot_user_id} не может авторизаоваться.")
-        return
-
-    # ------ SEND USER AUTH link in HTML format ------
-    
-    # Build OAuth link and send it to the user
-    auth_link = create_oauth_link(state=bot_user_id)
-    # Format oauth link text to keep https links in html format
-    formatted_oauth_link_text = format_oauth_link_text(oauth_link=auth_link)
-    authorization_request_text = AUTH_REQ_TEXT + formatted_oauth_link_text
-    await send_message_to_user(update, context, text=authorization_request_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-    await asyncio.sleep(1) 
-
-    # ------ WAIT FOR USER AUTHORIZATION ------
-
-    await send_message_to_user(update, context, text="⏳ Ожидаю авторизацию...")
-    # Wait for user to authorize - retry 5 times over ~60 seconds
-    max_attempts = 20
-    retry_delay = 6  # seconds between retries
-    endpoint_response = None
-    # Retry to get access token by state 5 times over ~60 seconds
-    for attempt in range(1, max_attempts + 1):
-        await asyncio.sleep(retry_delay)
-        endpoint_response = get_token_by_state(state=bot_user_id, bot_shared_secret=BOT_SHARED_SECRET)
-        
-        if endpoint_response is not None:
-            if endpoint_response is not CALLBACK_ENDPOINT_RESPONSE_WHEN_RECORDS_NOT_READY:
-                logger.debug(f"Endpoint response: {endpoint_response}")
-                access_token = get_access_token_from_callback_endpoint_resp(endpoint_response=endpoint_response)
-                expires_at = get_expires_at_from_callback_endpoint_resp(endpoint_response=endpoint_response)
-                if access_token is not None and expires_at is not None:
-                    update_user_records_with_top_level_key(record_id=bot_user_id, key="access_token_recieved", value="yes")
-                    update_user_records_with_top_level_key(record_id=bot_user_id, key="access_token", value=access_token)
-                    update_user_records_with_top_level_key(record_id=bot_user_id, key="access_token_expires_at", value=expires_at)
-                logger.info(f"Authorization successful on attempt {attempt}. Access token '{access_token}' and expires_at '{expires_at}' updated in records.")
-                await send_message_to_user(update, context, text=AUTH_SUCCESS_TEXT)
-
-    # ----- PULL USER DATA from HH and enrich records with it -----
-
-                await pull_user_data_from_hh_command(update=update, context=context)
-                
-                #Stop the loop after successful authorization
-                break
-        else:
-            logger.debug(f"Attempt {attempt}/{max_attempts}: User hasn't authorized yet. Retrying...")
-    # If still None after all attempts, user didn't authorize
-    if endpoint_response is None:
-        await send_message_to_user(update, context, text=AUTH_FAILED_TEXT)
-        return
-
-
-async def pull_user_data_from_hh_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [user_related]
-    """Pull user data from HH and enrich records with it. 
-    Called from: 'hh_authorization_command'.
-    Triggers: 'select_vacancy_command'.
-    Sends notification to admin if fails"""
-    
-    try:
-        # ----- IDENTIFY USER and pull required data from records -----
-
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-
-        # ----- CHECK IF USER DATA is already in records and STOP if it is -----
-
-        # Check if user is already authorized, if not, pull user data from HH
-        if is_hh_data_in_user_record(record_id=bot_user_id):
-            logger.debug(f"'bot_user_id': {bot_user_id} already has HH data in user record.")
-            return 
-            
-        # ----- PULL USER DATA from HH and enrich records with it -----
-
-        # Get user info from HH.ru API
-        hh_user_info = get_user_info_from_hh(access_token=access_token)
-        # Clean user info received from HH.ru API
-        cleaned_hh_user_info = clean_user_info_received_from_hh(user_info=hh_user_info)
-        # Update user info from HH.ru API in records
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="data_from_hh", value=cleaned_hh_user_info)
-
-        # ----- SELECT VACANCY -----
-
-        await select_vacancy_command(update=update, context=context)
-    
-    except Exception as e:
-        logger.error(f"Failed to pull user data from HH: {e}", exc_info=True)
-        # Send notification to admin about the error
-        if context.application:
-            await send_message_to_admin(
-                application=context.application,
-                text=f"⚠️ Error pulling user data from HH: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-async def ask_to_record_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [user_related]
-    """Ask to record video command. 
-    Called from: 'handle_vacancy_selection'.
-    Triggers: nothing."""
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    target_vacancy_name = get_target_vacancy_name_from_records(record_id=bot_user_id)
-
-    # ----- CHECK MUST CONDITIONS are met and STOP if not -----
-
-    if not is_privacy_policy_confirmed(bot_user_id=bot_user_id):
-        await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
-        return
-
-    if not is_vacancy_selected(record_id=bot_user_id):
-        logger.debug(f"'bot_user_id': {bot_user_id} doesn't have target vacancy selected.")
-        await send_message_to_user(update, context, text=MISSING_VACANCY_SELECTION_TEXT)
-        return
-
-    if is_welcome_video_recorded(record_id=bot_user_id):
-        logger.debug(f"'bot_user_id': {bot_user_id} already has welcome video recorded for vacancy '{target_vacancy_name}'.")
-        await send_message_to_user(update, context, text=SUCCESS_TO_RECORD_VIDEO_TEXT + f" Вакансия: '{target_vacancy_name}'.")
-        return
-
-    # ----- ASK USER IF WANTS TO RECORD or drop welcome video for the selected vacancy -----
-
-    # Build options (which will be tuples of (button_text, callback_data))
-    answer_options = [
-        ("Хочу записать или загрузить видео", "record_video_request:yes"), 
-        ("Продолжить без видео", "record_video_request:no")
-        ]
-    # Store button_text and callback_data options in context to use it later for button _text identification as this is not stored in "update.callback_query" object
-    context.user_data["video_record_request_options"] = answer_options
-    await ask_question_with_options(update, context, question_text=WELCOME_VIDEO_RECORD_REQUEST_TEXT, answer_options=answer_options)
-    logger.debug(f"Record video request question with options asked")
-
-
-async def handle_answer_video_record_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [user_related]
-    """Handle button click. 
-    Called from: nowhere.
-    Triggers commands:
-    - If user agrees to record, sends instructions to shootv ideo command'.
-    - If user does not agree to record, triggers 'read_vacancy_description_command'.
-
-    This is called AUTOMATICALLY by Telegram when a button is clicked (via CallbackQueryHandler).
-
-    Note: Bot knows which user clicked because:
-    - update.effective_user.id contains the user ID (works for both messages and callbacks)
-    - context.user_data is automatically isolated per user by python-telegram-bot framework
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    
-    # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
-
-    # Get the "callback_data" extracted from "update.callback_query" object created once button clicked
-    selected_callback_code = await handle_answer(update, context)
-    
-    logger.debug(f"Callback code found: {selected_callback_code}")
-
-    # ----- UNDERSTAND TEXT on clicked buttton from option taken from context -----
-
-    if not selected_callback_code:
-        if update.callback_query and update.callback_query.message:
-            logger.debug(f"No callback code found in update.callback_query.message")
-            await send_message_to_user(update, context, text="Не удалось определить ваш выбор. Попробуйте еще раз командой /ask_to_record_video.")
-        return
-
-    logger.debug(f"Callback code found: {selected_callback_code}")
-
-    # Get options from context or use fallback defaults if not found
-    video_record_request_options = context.user_data.get("video_record_request_options", [])
-    logger.debug(f"Video record request options: {video_record_request_options}")
-    if not video_record_request_options:
-        video_record_request_options = [
-            ("Хочу записать или загрузить видео", "record_video_request:yes"),
-            ("Продолжить без видео", "record_video_request:no"),
-        ]
-    logger.debug(f"Video record request options set: {video_record_request_options}")
-    selected_button_text = None
-    # find selected button text from callback_data
-    for button_text, callback_code in video_record_request_options:
-        if selected_callback_code == callback_code:
-            selected_button_text = button_text
-            # Clear video record request options from "context" object, because now use "selected_button_text" variable instead
-            context.user_data.pop("video_record_request_options", None)
-            break
-    logger.debug(f"Selected button text: {selected_button_text}")
-    logger.debug(f"Context user data: {context.user_data}")
-
-    # ----- INFORM USER about selected option -----
-
-    if selected_button_text:
-        await send_message_to_user(update, context, text=f"Вы выбрали: '{selected_button_text}'")
-    else:
-        # No option identified, inform user and return
-        if update.callback_query and update.callback_query.message:
-            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-        return
-
-    # ----- UPDATE USER RECORDS with selected vacancy data and infrom user -----
-
-    # Now you can use callback_data or selected_option for your logic
-    if update.callback_query and update.callback_query.message:
-        logger.debug(f"Selected callback code: {selected_callback_code}")
-        if selected_callback_code is None:
-            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-            return
-        video_record_request_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
-        logger.debug(f"Video record request user decision: {video_record_request_user_decision}")
-        # Update user records with selected vacancy data
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_record_agreed", value=video_record_request_user_decision)
-        logger.debug(f"User records updated")
-    
-    # ----- PROGRESS THROUGH THE VIDEO FLOW BASED ON THE USER'S RESPONSE -----
-
-    # ----- IF USER CHOSE "YES" send instructions to shoot video -----
-
-    if video_record_request_user_decision == "yes":
-        logger.debug(f"Video record request user decision is yes")
-        await send_message_to_user(update, context, text=INSTRUCTIONS_TO_SHOOT_VIDEO_TEXT)
-        
-        # ----- NOW HANDLER LISTENING FOR VIDEO from user -----
-
-        # this line just for info that handler will work from "create_manager_application" method in file "applicant_bot.py"
-        # once handler will be triggered, it will trigget "handle_video" method from file "services.video_service.py"
-
-    # ----- IF USER CHOSE "NO" inform user about need to continue without video -----
-
-    else:
-        await send_message_to_user(update, context, text=CONTINUE_WITHIOUT_WELCOME_VIDEO_TEXT)
-
-        # ----- READ VACANCY DESCRIPTION -----
-
-        await read_vacancy_description_command(update=update, context=context)
-
-
-async def ask_confirm_sending_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [user_related]
-    """Ask confirm sending video command handler. 
-    Called from: 'process_incoming_video' from file "services.video_service.py".
-    Triggers: nothing. """
-
-    # Build options (which will be tuples of (button_text, callback_data))
-    answer_options = [
-        ("Да. Отправить это.", "sending_video_confirmation:yes"),
-        ("Нет. Попробую еще раз.", "sending_video_confirmation:no"),
-    ]
-    # Store button_text and callback_data options in context to use it later for button _text identification as this is not stored in "update.callback_query" object
-    context.user_data["sending_video_confirmation_answer_options"] = answer_options
-    await ask_question_with_options(update, context, question_text=VIDEO_SENDING_CONFIRMATION_TEXT, answer_options=answer_options)
-
-
-async def handle_answer_confrim_sending_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [user_related]
-    """Handle button click.
-    Called from: nowhere.
-    Triggers commands:
-    - If user agrees to send video, triggers 'download_incoming_video_locally' method.
-    - If user does not agree to send video, inform that waiting for another video to be sent by user.
-    """
-    
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-
-    # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
-
-    # Get the "callback_data" extracted from "update.callback_query" object created once button clicked
-    selected_callback_code = await handle_answer(update, context)
-
-    # ----- UNDERSTAND TEXT on clicked buttton from option taken from context -----
-
-    # Get options from context or return empty list [] if not found
-    sending_video_confirmation_answer_options = context.user_data.get("sending_video_confirmation_answer_options", [])
-    # find selected button text from callback_data
-    for button_text, callback_code in sending_video_confirmation_answer_options:
-        if selected_callback_code == callback_code:
-            selected_button_text = button_text
-            # Clear sending video confirmation answer options from "context" object, because now use "selected_button_text" variable instead
-            context.user_data.pop("sending_video_confirmation_answer_options", None)
-            break
-
-    # ----- INFORM USER about selected option -----
-
-    # If "options" is NOT an empty list execute the following code
-    if sending_video_confirmation_answer_options:
-        await send_message_to_user(update, context, text=f"Вы выбрали: '{selected_button_text}'")
-    else:
-        # No options available, inform user and return
-        if update.callback_query and update.callback_query.message:
-            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-        return
-
-    # ----- UPDATE USER RECORDS with selected vacancy data -----
-
-    # Now you can use callback_data or selected_option for your logic
-    if update.callback_query and update.callback_query.message:
-        if selected_callback_code is None:
-            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-            return
-        sending_video_confirmation_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
-        # Update user records with selected vacancy data
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_sending_confirmed", value=sending_video_confirmation_user_decision)
-
-    # ----- IF USER CHOSE "YES" start video download  -----
-
-    if sending_video_confirmation_user_decision == "yes":
-        
-        # ----- GET VIDEO DETAILS from message -----
-
-        # Get file_id and video_kind from user_data
-        file_id = context.user_data.get("pending_file_id")
-        video_kind = context.user_data.get("pending_kind")
-
-        # ----- DOWNLOAD VIDEO to local storage -----
-        logger.debug(f"Downloading video to local storage...")
-        await download_incoming_video_locally(
-            update=update,
-            context=context,
-            tg_file_id=file_id,
-            user_id=bot_user_id,
-            file_type=video_kind
-        )
-        await send_message_to_user(update, context, text=SUCCESS_TO_SAVE_VIDEO_TEXT)
-
-        # ----- UPDATE USER RECORDS with video status and path -----
-        # skipping as updated in "download_incoming_video_locally" method
-
-        # ----- IF VIDEO NOT FOUND, ask for another video -----
-
-        if not file_id:
-            logger.warning("No file_id found in user_data")
-            await send_message_to_user(update, context, text=MISSING_VIDEO_RECORD_TEXT)
-            return
-
-    else:
-
-    # ----- IF USER CHOSE "NO" ask for another video -----
-
-        await send_message_to_user(update, context, text=WAITING_FOR_ANOTHER_VIDEO_TEXT)
 
 
 async def select_vacancy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

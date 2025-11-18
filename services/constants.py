@@ -1,27 +1,10 @@
 # TAGS: [user_messages]
-
-PROMPT_DIR = "docs/ai_prompts"
-RESUME_PASSED_SCORE = 6
-VACANCY_STATUS_TO_FILTER = "open"
-
-
-AVAILABLE_EMPLOYER_STATES_COLLECTION_STATUS = ["response", "consider", "phone_interview", "interview", "offer", "hired"]
-TARGET_EMPLOYER_STATE_COLLECTION_STATUS = "response"
-NEW_EMPLOYER_STATE_COLLECTION_STATUS = "consider"
-
-VACANCY_LIST = [('126323420', 'Вакансия 1'), ('9876543210', 'Вакансия 2')]
-
 # ----- MENU BUTTONS CONSTANTS -----
 
 BTN_MENU = "Главное меню"
 BTN_FEEDBACK = "Обратная связь"
 
-BASE_URL = "https://hrvibe-hh-callback-endpoint.onrender.com"
 
-
-# ----- VIDEO DIRECTORIES CONSTANTS -----
-
-SOURCING_VIDEO_DATA_DIR = ""
 
 BOT_FOR_APPLICANTS_USERNAME="MeetYourManagerBot"
 
@@ -46,13 +29,11 @@ VIDEO_SENDING_CONFIRMATION_TEXT = (
 # ----- DATA SERVICE CONSTANTS -----
 
 DATA_DIR = "users_data"
-USERS_RECORDS_FILENAME = "records"
-RESUME_RECORDS_FILENAME = "resume_records"
-RESUME_SUBDIRECTORIES_LIST = ["new", "passed", "failed"]
+APPLICANT_BOT_DATA_DIR = "applicant_bot_data"
+APPLICANT_BOT_RECORDS_FILENAME = "applicant_bot_records"
+
 
 # ----- AI SERVICE CONSTANTS -----
-
-MODEL_NAME = "gpt-5"
 
 # ----- VIDEO SERVICE CONSTANTS -----
 
@@ -72,13 +53,13 @@ WAITING_FOR_ANOTHER_VIDEO_TEXT = "Хорошо, кидайте другое ви
 CONTINUE_WITHIOUT_WELCOME_VIDEO_TEXT = "Продолжим без приветственного видео. Вы можете вернуться к этому этапу командой нажав кнопку 'Главное меню'."
 
 
-PRIVACY_POLICY_LINK = "https://hrvibe.ru/policy-personal-data"
-PRIVACY_POLICY_PROCESSING_CONFIRMATION_LINK = "https://hrvibe.ru/confirmation-personal-data-processing"
+PRIVACY_POLICY_LINK_APPLICANT = "https://hrvibe.ru/policy-personal-data"
+PRIVACY_POLICY_PROCESSING_CONFIRMATION_LINK_APPLICANT = "https://hrvibe.ru/confirmation-personal-data-processing"
 
-PRIVACY_POLICY_CONFIRMATION_TEXT = (
+PRIVACY_POLICY_CONFIRMATION_TEXT_APPLICANT = (
     f"Для продолжения работы с ботом:\n"
-    f"- ознакомьтесь с <a href=\"{PRIVACY_POLICY_LINK}\">политикой обработки персональных данных</a>\n" 
-    f"- подтвердите <a href=\"{PRIVACY_POLICY_PROCESSING_CONFIRMATION_LINK}\">согласие на обработку персональных данных и видео</a>\n"
+    f"- ознакомьтесь с <a href=\"{PRIVACY_POLICY_LINK_APPLICANT}\">политикой обработки персональных данных</a>\n" 
+    f"- подтвердите <a href=\"{PRIVACY_POLICY_PROCESSING_CONFIRMATION_LINK_APPLICANT}\">согласие на обработку персональных данных и видео</a>\n"
 )
 
 APPLICANT_MESSAGE_TEXT_WITHOUT_LINK = "Здравствуйте. Мы очень заинтересовались вашим резюме. Чтобы ускорить процесс выхода на интервью, пройдите в телеграм бота и посмотрите приветственное видео менеджера:"
@@ -87,9 +68,8 @@ APPLICANT_MESSAGE_TEXT_WITHOUT_LINK = "Здравствуйте. Мы очень
 # ----- USER MESSAGES CONSTANTS with SUCCESS status-----
 
 SUCCESS_TO_GET_PRIVACY_POLICY_CONFIRMATION_TEXT = "Согласие на обработку персональных данных получено, можем продолжить работу."
-SUCCESS_TO_HH_AUTHORIZATION_TEXT = "Вы успешно авторизовались в HeadHunter.ru."
-SUCCESS_TO_SELECT_VACANCY_TEXT = "Вы уже выбрали вакансию для работы."
-SUCCESS_TO_RECORD_VIDEO_TEXT = "Вы уже записали преветственное видео."
+SUCCESS_TO_GET_WELCOME_VIDEO_TEXT = "Вы ужу посмотрели приветственное видео от менеджера."
+SUCCESS_TO_RECORD_RESUMEVIDEO_TEXT = "Вы уже записали видео для менеджера."
 SUCCESS_TO_SAVE_VIDEO_TEXT = "Приветственное видео успешно сохранено."
 SUCCESS_TO_GET_SOURCING_CRITERIAS_TEXT = "Я уже проанализировал вакансию и определил критерии для отбора кандидатов."
 
@@ -112,6 +92,8 @@ MISSING_VIDEO_RECORD_TEXT = "Нет видео для сохранения. Пр
 FEEDBACK_REQUEST_TEXT = "Напишите ваш вопрос или обратную связь в чате и я направлю ее админу."
 FEEDBACK_SENT_TEXT = "Ваше сообщение отправлено администратору. Спасибо за обратную связь!"
 FEEDBACK_ONLY_TEXT_ALLOWED_TEXT = "Пожалуйста, отправьте только текстовое сообщение. Видео, аудио и изображения пока не принимаются."
+FAIL_TECHNICAL_SUPPORT_TEXT = "Произошла ошибка. Тех. поддержка уже спешит на помощь."
+FAIL_TO_IDENTIFY_PAYLOAD_TEXT = "Не удалось определить по какой вакансии и резюме вы пришли."
 
 # ----- INTERVIEW INVITATION CONSTANTS -----
 
