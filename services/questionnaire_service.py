@@ -23,10 +23,10 @@ def _track_message_with_keyboard(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data["messages_with_keyboards"].append((chat_id, message_id))
     
     # Track in persistent storage
-    bot_user_id = update.effective_user.id if update.effective_user else None
-    if bot_user_id:
+    applicant_record_id = update.effective_user.id if update.effective_user else None
+    if applicant_record_id:
         add_persistent_keyboard_message(
-            bot_user_id=str(bot_user_id),
+            applicant_record_id=str(applicant_record_id),
             chat_id=chat_id,
             message_id=message_id
         )
@@ -42,10 +42,10 @@ def _remove_message_from_keyboard_tracking(update: Update, context: ContextTypes
         ]
     
     # Remove from persistent storage
-    bot_user_id = update.effective_user.id if update.effective_user else None
-    if bot_user_id:
+    applicant_record_id = update.effective_user.id if update.effective_user else None
+    if applicant_record_id:
         remove_persistent_keyboard_message(
-            bot_user_id=str(bot_user_id),
+            applicant_record_id=str(applicant_record_id),
             chat_id=chat_id,
             message_id=message_id
         )
@@ -54,13 +54,13 @@ def _remove_message_from_keyboard_tracking(update: Update, context: ContextTypes
 async def clear_all_unprocessed_keyboards(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
     """Clear all unprocessed inline keyboards for a user (both session and persistent storage).
     Args:
-        update: Telegram Update object (needed to get bot_user_id)
+        update: Telegram Update object (needed to get applicant_record_id)
         context: Telegram Context object
         chat_id: Chat ID to clear keyboards for
     """
-    bot_user_id = update.effective_user.id if update.effective_user else None
-    if not bot_user_id:
-        logger.debug("Cannot clear keyboards: no bot_user_id found")
+    applicant_record_id = update.effective_user.id if update.effective_user else None
+    if not applicant_record_id:
+        logger.debug("Cannot clear keyboards: no applicant_record_id found")
         return
     
     # Collect messages from both session and persistent storage
@@ -74,7 +74,7 @@ async def clear_all_unprocessed_keyboards(update: Update, context: ContextTypes.
     
     # Get from persistent storage
     persistent_messages = get_persistent_keyboard_messages(
-        bot_user_id=str(bot_user_id)
+        applicant_record_id=str(applicant_record_id)
     )
     for msg_chat_id, message_id in persistent_messages:
         if msg_chat_id == chat_id:
@@ -101,7 +101,7 @@ async def clear_all_unprocessed_keyboards(update: Update, context: ContextTypes.
     
     # Clear persistent storage
     clear_all_persistent_keyboard_messages(
-        bot_user_id=str(bot_user_id)
+        applicant_record_id=str(applicant_record_id)
     )
     
     if cleared_count > 0:

@@ -31,14 +31,14 @@ from services.status_validation_service import (
     is_applicant_privacy_policy_confirmed,
     is_welcome_video_shown_to_applicant,
     is_resume_video_received,
+    is_vacancy_exist,
 )
 
 from services.data_service import (
-    get_vacancy_directory,
     get_directory_for_video_from_managers,
     get_manager_user_id_from_applicant_bot_records,
     get_vacancy_id_from_applicant_bot_records,
-    create_applicant_bot_records,
+    create_new_applicant_in_applicant_bot_records,
     update_applicant_bot_records_with_top_level_key,
     get_applicant_bot_records_file_path,
     get_tg_user_data_attribute_from_update_object,
@@ -52,7 +52,27 @@ from services.questionnaire_service import (
 )
 
 
-from services.constants import *
+from services.constants import (
+    BTN_MENU,
+    BTN_FEEDBACK,
+    FAIL_TO_IDENTIFY_PAYLOAD_TEXT,
+    FAIL_TECHNICAL_SUPPORT_TEXT,
+    SUCCESS_TO_GET_PRIVACY_POLICY_CONFIRMATION_TEXT,
+    PRIVACY_POLICY_CONFIRMATION_TEXT_APPLICANT,
+    MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT,
+    SUCCESS_TO_GET_WELCOME_VIDEO_TEXT,
+    INFO_UPLOADING_WELCOME_VIDEO_TEXT,
+    INFO_VIDEO_ALREADY_SAVED_TEXT,
+    WELCOME_VIDEO_RECORD_REQUEST_TEXT,
+    INSTRUCTIONS_TO_SHOOT_VIDEO_TEXT,
+    CONTINUE_WITHIOUT_APPLICANT_VIDEO_TEXT,
+    VIDEO_SENDING_CONFIRMATION_TEXT,
+    MISSING_VIDEO_RECORD_TEXT,
+    WAITING_FOR_ANOTHER_VIDEO_TEXT,
+    FEEDBACK_REQUEST_TEXT,
+    FEEDBACK_SENT_TEXT,
+    FEEDBACK_ONLY_TEXT_ALLOWED_TEXT,
+)
 
 
 ########################################################
@@ -74,18 +94,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Called from: 'start' button in main menu.
     Triggers: 1) setup new user 2) ask privacy policy confirmation
     """
-
     # ----- SETUP NEW USER and send welcome message -----
 
     # if existing user, setup_new_user_command will be skipped
     await setup_new_applicant_command(update=update, context=context)
-
-    # ----- ASK PRIVACY POLICY CONFIRMATION -----
-
-    # if already confirmed, second confirmation will be skipped
-    await ask_privacy_policy_confirmation_command(update=update, context=context)
-
-    # IMPORTANT: ALL OTHER COMMANDS will be triggered from functions if PRIVACY POLICY is confirmed
 
 
 async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -102,15 +114,24 @@ async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFA
         logger.debug(f"applicant_user_id: {applicant_user_id}")
 
         if not is_applicant_in_applicant_bot_records(applicant_record_id=applicant_user_id):
-            create_applicant_bot_records(applicant_record_id=applicant_user_id)
+            create_new_applicant_in_applicant_bot_records(applicant_record_id=applicant_user_id)
         else:
             logger.debug(f"Applicant {applicant_user_id} already in applicant bot records")
 
+        # ------ ENRICH APPLICANT RECORDS with NEW USER DATA from Telegram user attributes ------
+
+        tg_user_attributes = ["username", "first_name", "last_name"]
+        for item in tg_user_attributes:
+            tg_user_attribute_value = get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute=item)
+            update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key=item, value=tg_user_attribute_value)
+        logger.debug(f"{applicant_user_id} in user records is updated with telegram user attributes.")
+
         # ----- EXTRACT PAYLOAD from Telegram start command -----
-        # Link structure: https://t.me/{BOT_FOR_APPLICANTS_USERNAME}?start={manager_user_id}:{vacancy_id}:{resume_id}"
+        # Link structure: https://t.me/{BOT_FOR_APPLICANTS_USERNAME}?start={manager_user_id}_{vacancy_id}_{resume_id}"
         
         payload = None
         if update.message and update.message.text:
+            logger.debug(f"update.message.text: {update.message.text}")
             # Telegram sends /start PAYLOAD as the message text
             text_parts = update.message.text.split(maxsplit=1)
             logger.debug(f"text_parts: {text_parts}")
@@ -121,7 +142,7 @@ async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFA
         
         if payload:
             # Parse payload format: "resume_id:vacancy_id"
-            payload_parts = payload.split(":")
+            payload_parts = payload.split("_")
             logger.debug(f"payload_parts: {payload_parts}")
             if len(payload_parts) == 3:
                 manager_user_id = payload_parts[0]
@@ -131,8 +152,8 @@ async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFA
 
                 # ----- CHECK IF SUCH VACANCY exists in vacancy_records and STOP if not -----
 
-                vacancy_records_file_path = get_vacancy_directory(user_record_id=manager_user_id, vacancy_id=vacancy_id) 
-                if vacancy_records_file_path is None:
+                if not is_vacancy_exist(user_record_id=manager_user_id, vacancy_id=vacancy_id):
+                    logger.debug(f"Vacancy {vacancy_id} not found for manager {manager_user_id}")
                     await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
                     return
 
@@ -144,13 +165,12 @@ async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFA
 
                 logger.debug(f"Applicant bot records updated for applicant_user_id: {applicant_user_id} with payload - manager_user_id: {manager_user_id}, vacancy_id: {vacancy_id}, resume_id: {resume_id}.")
 
-                # ------ ENRICH RECORDS with NEW USER DATA ------
+                # ----- ASK PRIVACY POLICY CONFIRMATION -----
 
-                tg_user_attributes = ["username", "first_name", "last_name"]
-                for item in tg_user_attributes:
-                    tg_user_attribute_value = get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute=item)
-                    update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key=item, value=tg_user_attribute_value)
-                logger.debug(f"{applicant_user_id} in user records is updated with telegram user attributes.")
+                # if already confirmed, second confirmation will be skipped
+                await ask_privacy_policy_confirmation_command(update=update, context=context)
+
+                # IMPORTANT: ALL OTHER COMMANDS will be triggered from functions if PRIVACY POLICY is confirmed
 
             else:
                 logger.warning(f"Invalid payload format: {payload}")
@@ -172,12 +192,21 @@ async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFA
 async def ask_privacy_policy_confirmation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # TAGS: [user_related]
     """Ask privacy policy confirmation command handler. 
-    Called from: 'start_command'.
+    Called from: 'setup_new_applicant_command'.
     Triggers: nothing."""
 
     # ----- IDENTIFY USER and pull required data from records -----
 
     applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    manager_user_id = get_manager_user_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+    vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+
+    # ----- CHECK IF SUCH VACANCY exists and STOP if not -----
+
+    if not is_vacancy_exist(user_record_id=manager_user_id, vacancy_id=vacancy_id):
+        logger.debug(f"Vacancy {vacancy_id} not found for manager {manager_user_id}")
+        await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
+        return
 
     # ----- CHECK IF PRIVACY POLICY is already confirmed and STOP if it is -----
 
@@ -277,11 +306,20 @@ async def show_welcome_video_command(update: Update, context: ContextTypes.DEFAU
     manager_user_id = get_manager_user_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
     vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
 
+    # ----- CHECK IF SUCH VACANCY exists and STOP if not -----
+
+    if not is_vacancy_exist(user_record_id=manager_user_id, vacancy_id=vacancy_id):
+        logger.debug(f"Vacancy {vacancy_id} not found for manager {manager_user_id}")
+        await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
+        return
+
     # ----- CHECK IF WELCOME VIDEO is already shown and STOP if it is -----
 
     if is_welcome_video_shown_to_applicant(applicant_record_id=applicant_user_id):
         await send_message_to_user(update, context, text=SUCCESS_TO_GET_WELCOME_VIDEO_TEXT)
         return
+
+    await send_message_to_user(update, context, text=INFO_UPLOADING_WELCOME_VIDEO_TEXT)
 
     # ----- GET WELCOME VIDEO from managers -----
 
@@ -314,12 +352,28 @@ async def ask_to_record_video_command(update: Update, context: ContextTypes.DEFA
     # ----- IDENTIFY USER and pull required data from records -----
 
     applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    manager_user_id = get_manager_user_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+    vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+
+
+    # ----- CHECK IF SUCH VACANCY exists and STOP if not -----
+
+    if not is_vacancy_exist(user_record_id=manager_user_id, vacancy_id=vacancy_id):
+        logger.debug(f"Vacancy {vacancy_id} not found for manager {manager_user_id}")
+        await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
+        return
+
+
+    if is_resume_video_received(applicant_record_id=applicant_user_id):
+        await send_message_to_user(update, context, text=INFO_VIDEO_ALREADY_SAVED_TEXT)
+        return
 
     # ----- CHECK MUST CONDITIONS are met and STOP if not -----
 
     if not is_applicant_privacy_policy_confirmed(applicant_record_id=applicant_user_id):
         await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
         return
+
 
     # ----- ASK USER IF WANTS TO RECORD or drop welcome video for the selected vacancy -----
 
@@ -518,9 +572,6 @@ async def handle_answer_confrim_sending_video(update: Update, context: ContextTy
             applicant_user_id=applicant_user_id,
             file_type=video_kind
         )
-        await send_message_to_user(update, context, text=SUCCESS_TO_SAVE_VIDEO_TEXT)
-        await asyncio.sleep(1)
-        await send_message_to_user(update, context, text=INFO_ABOUT_VIDEO_DELETION_TEXT)
 
         # ----- UPDATE USER RECORDS with video status and path -----
         # skipping as updated in "download_incoming_video_locally" method
@@ -709,6 +760,7 @@ async def build_user_status_text(status_dict: dict) -> str:
         status_text = status_to_text_transcription[key]
         user_status_text += f"{status_image}{status_text}\n"
     return user_status_text
+
 
 async def show_chat_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 

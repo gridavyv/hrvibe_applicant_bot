@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -184,12 +185,21 @@ def create_applicant_bot_records_file() -> Path:
         logger.debug(f"{applicant_bot_records_file_path} already exists.")
 
 
-def create_applicant_bot_records(applicant_record_id: str) -> None:
+
+def create_new_applicant_in_applicant_bot_records(applicant_record_id: str) -> None:
     # TAGS: [create_data],[applicant_bot_usage]
     """Create applicant bot records."""
     applicant_bot_records_file_path = get_applicant_bot_records_file_path()
-    with open(applicant_bot_records_file_path, "w", encoding="utf-8") as f:
-        applicant_bot_records = json.load(f)
+    logger.debug(f"applicant_bot_records_file_path: {applicant_bot_records_file_path}")
+    
+    # Read existing records
+    if applicant_bot_records_file_path.exists():
+        with open(applicant_bot_records_file_path, "r", encoding="utf-8") as f:
+            applicant_bot_records = json.load(f)
+        logger.debug(f"applicant_bot_records: {applicant_bot_records}")
+    else:
+        applicant_bot_records = {}
+        logger.debug(f"applicant_bot_records: {applicant_bot_records}")
     
     # applicant_record_id is already a string - keep in mind JSON keys are always strings
     if applicant_record_id not in applicant_bot_records:
@@ -201,6 +211,7 @@ def create_applicant_bot_records(applicant_record_id: str) -> None:
             "username": "",
             "first_name": "",
             "last_name": "",
+            "first_time_seen": datetime.now(timezone.utc).isoformat(),
             "privacy_policy_confirmed": "no",  
             "privacy_policy_confirmation_time": "",  
             "welcome_video_shown": "no", 

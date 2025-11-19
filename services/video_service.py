@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from re import U
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.data_service import (
@@ -14,6 +15,13 @@ from services.data_service import (
     get_directory_for_video_from_applicants,
     get_resume_id_from_applicant_bot_records,
     update_applicant_bot_records_with_top_level_key
+)
+from services.constants import (
+    FAIL_TECHNICAL_SUPPORT_TEXT,
+    SUCCESS_TO_SAVE_VIDEO_TEXT,
+    INFO_ABOUT_VIDEO_DELETION_TEXT,
+    FAIL_TO_DOWNLOAD_VIDEO_TEXT,
+    INFO_DOWNLOADING_APPLICANT_VIDEO_STARTED_TEXT
 )
 
 logger = logging.getLogger(__name__)
@@ -115,6 +123,14 @@ async def download_incoming_video_locally(update: Update, context: ContextTypes.
         vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
         video_dir_path = get_directory_for_video_from_applicants(user_record_id=manager_user_id, vacancy_id=vacancy_id)
         resume_id = get_resume_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+
+        await send_message_to_user(update, context, text=INFO_DOWNLOADING_APPLICANT_VIDEO_STARTED_TEXT)
+
+
+        if video_dir_path is None:
+            logger.warning(f"Video directory path not found for applicant {applicant_user_id}")
+            raise ValueError("Video directory path not found for applicant")
+
         # Generate unique filename with appropriate extension
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         if file_type == "video_note":
@@ -139,7 +155,7 @@ async def download_incoming_video_locally(update: Update, context: ContextTypes.
 
         # Update user records with video received and video path
         update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="resume_video_received", value="yes")
-        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="resume_video_path", value=video_file_path)
+        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="resume_video_path", value=str(video_file_path))
 
         # Clear pending video data from context object
         _clear_pending_video_data_from_context_object(context=context)
@@ -147,17 +163,32 @@ async def download_incoming_video_locally(update: Update, context: ContextTypes.
         # Verify the file was created successfully
         if video_file_path.exists():
             logger.debug(f"Video file created successfully: {video_file_path}")
-
-            from applicant_bot import read_vacancy_description_command
-
-            # ----- READ VACANCY DESCRIPTION -----
-
-            await read_vacancy_description_command(update=update, context=context)
-
+            await send_message_to_user(update, context, text=SUCCESS_TO_SAVE_VIDEO_TEXT)
+            await asyncio.sleep(1)
+            await send_message_to_user(update, context, text=INFO_ABOUT_VIDEO_DELETION_TEXT)
         else:
             logger.warning(f"Video file not created: {video_file_path}")
-            await send_message_to_user(update, context, text="Ошибка при скачивании видео. Пришлите заново, пожалуйста.")
+            await send_message_to_user(update, context, text=FAIL_TO_DOWNLOAD_VIDEO_TEXT)
 
     except Exception as e:
         logger.error(f"Failed to download video: {str(e)}", exc_info=True)
+        # Send error message to user
+        await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
+        # Send notification to admin about the error
+        try:
+            from applicant_bot import send_message_to_admin
+            if context.application:
+                error_message = (
+                    f"⚠️ Error downloading video from applicant\n\n"
+                    f"Applicant User ID: {applicant_user_id}\n"
+                    f"File ID: {tg_file_id}\n"
+                    f"File Type: {file_type}\n"
+                    f"Error: {str(e)}"
+                )
+                await send_message_to_admin(
+                    application=context.application,
+                    text=error_message
+                )
+        except Exception as admin_error:
+            logger.error(f"Failed to send admin notification: {admin_error}", exc_info=True)
 
