@@ -4,12 +4,7 @@
 import json
 import logging
 from pathlib import Path
-from services.data_service import (
-    get_applicant_bot_records_file_path,
-    get_users_records_file_path,
-    get_resume_records_file_path,
-    get_vacancy_directory,
-)
+from services.data_service import get_applicant_bot_records_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +25,7 @@ def is_applicant_in_applicant_bot_records(applicant_record_id: str) -> bool:
         logger.debug(f"'applicant_record_id': {applicant_record_id} not found in records")
         return False
 
+
 def is_applicant_privacy_policy_confirmed(applicant_record_id: str) -> bool:
     # TAGS: [status_validation],[applicant_bot_usage]
     """Check if privacy policy is confirmed."""
@@ -48,7 +44,7 @@ def is_applicant_privacy_policy_confirmed(applicant_record_id: str) -> bool:
         return False
 
 
-def is_applicant_welcome_video_shown(applicant_record_id: str) -> bool:
+def is_welcome_video_shown_to_applicant(applicant_record_id: str) -> bool:
     # TAGS: [status_validation],[applicant_bot_usage]
     """Check if welcome video is shown."""
     applicant_bot_records_file_path = get_applicant_bot_records_file_path()
@@ -60,24 +56,6 @@ def is_applicant_welcome_video_shown(applicant_record_id: str) -> bool:
             return True
         else:
             logger.debug(f"welcome video is NOT shown for 'applicant_record_id': {applicant_record_id} in {applicant_bot_records_file_path}")
-            return False
-    else:
-        logger.debug(f"'applicant_record_id': {applicant_record_id} is not found in {applicant_bot_records_file_path}")
-        return False
-
-
-def is_applicant_agreed_to_record_resume_video(applicant_record_id: str) -> bool:
-    # TAGS: [status_validation],[applicant_bot_usage]
-    """Check if applicant agreed to record resume video."""
-    applicant_bot_records_file_path = get_applicant_bot_records_file_path()
-    with open(applicant_bot_records_file_path, "r", encoding="utf-8") as f:
-        applicant_bot_records = json.load(f)
-    if applicant_record_id in applicant_bot_records:
-        if applicant_bot_records[applicant_record_id]["agreed_to_record_resume_video"] == "yes":
-            logger.debug(f"applicant agreed to record resume video for 'applicant_record_id': {applicant_record_id} in {applicant_bot_records_file_path}")
-            return True
-        else:
-            logger.debug(f"applicant did not agree to record resume video for 'applicant_record_id': {applicant_record_id} in {applicant_bot_records_file_path}")
             return False
     else:
         logger.debug(f"'applicant_record_id': {applicant_record_id} is not found in {applicant_bot_records_file_path}")

@@ -5,21 +5,21 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from re import U
 from telegram import Update
 from telegram.ext import ContextTypes
+from services.data_service import (
+    get_manager_user_id_from_applicant_bot_records,
+    get_vacancy_id_from_applicant_bot_records,
+    get_directory_for_video_from_applicants,
+    get_resume_id_from_applicant_bot_records,
+    update_applicant_bot_records_with_top_level_key
+)
 
 logger = logging.getLogger(__name__)
-from services.data_service import (
-    get_target_vacancy_id_from_records,
-    get_directory_for_video_from_managers,
-    update_user_records_with_top_level_key,
-    )
-from services.questionnaire_service import send_message_to_user
-from services.constants import (
-    MAX_DURATION_SECS, 
-    VIDEO_SAVED_TEXT,
-    )
 
+from services.questionnaire_service import send_message_to_user
+from services.constants import MAX_DURATION_SECS
 
 
 def _validate_incoming_video(file_size: int, duration: int, max_duration: int = MAX_DURATION_SECS) -> str:
@@ -107,20 +107,20 @@ async def process_incoming_video(update: Update, context: ContextTypes.DEFAULT_T
     await ask_confirm_sending_video_command(update, context)
 
 
-async def download_incoming_video_locally(update: Update, context: ContextTypes.DEFAULT_TYPE, tg_file_id: str, user_id: int, file_type: str) -> None:
+async def download_incoming_video_locally(update: Update, context: ContextTypes.DEFAULT_TYPE, tg_file_id: str, applicant_user_id: int, file_type: str) -> None:
     """Download video file to local storage"""
     try:
         query = update.callback_query
-        bot_user_id = user_id
-        target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-        video_dir_path = get_directory_for_video_from_managers(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-
+        manager_user_id = get_manager_user_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+        vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
+        video_dir_path = get_directory_for_video_from_applicants(user_record_id=manager_user_id, vacancy_id=vacancy_id)
+        resume_id = get_resume_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
         # Generate unique filename with appropriate extension
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         if file_type == "video_note":
-            filename = f"manager_{bot_user_id}_vacancy_{target_vacancy_id}_time_{timestamp}_note.mp4"
+            filename = f"applicant_{applicant_user_id}_resume_{resume_id}_time_{timestamp}_note.mp4"
         else:
-            filename = f"manager_{bot_user_id}_vacancy_{target_vacancy_id}_time_{timestamp}.mp4"
+            filename = f"applicant_{applicant_user_id}_resume_{resume_id}_time_{timestamp}.mp4"
 
         video_file_path = video_dir_path / filename
         logger.debug(f"Video file path: {video_file_path}")
@@ -138,8 +138,8 @@ async def download_incoming_video_locally(update: Update, context: ContextTypes.
         logger.debug(f"Video file downloaded to: {video_file_path}")
 
         # Update user records with video received and video path
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_received", value="yes")
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_path", value=video_file_path)
+        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="resume_video_received", value="yes")
+        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="resume_video_path", value=video_file_path)
 
         # Clear pending video data from context object
         _clear_pending_video_data_from_context_object(context=context)

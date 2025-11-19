@@ -1,21 +1,16 @@
 # TAGS: [admin], [user_related], [vacancy_related], [resume_related], [recommendation_related]
 
-from ast import Pass
 import asyncio
 import logging
 from datetime import datetime, timezone
-from multiprocessing import process
-from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional
 import os
 import json
-import shutil
 import re
 
 logger = logging.getLogger(__name__)
 
-from pydantic.type_adapter import P
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -34,80 +29,20 @@ from services.video_service import (
 from services.status_validation_service import (
     is_applicant_in_applicant_bot_records,
     is_applicant_privacy_policy_confirmed,
-    is_applicant_welcome_video_shown,
-    is_applicant_agreed_to_record_resume_video,
+    is_welcome_video_shown_to_applicant,
     is_resume_video_received,
 )
 
-
 from services.data_service import (
+    get_vacancy_directory,
     get_directory_for_video_from_managers,
     get_manager_user_id_from_applicant_bot_records,
     get_vacancy_id_from_applicant_bot_records,
-    get_resume_id_from_applicant_bot_records,
     create_applicant_bot_records,
     update_applicant_bot_records_with_top_level_key,
-    get_directory_for_video_from_applicants,
-    get_applicant_video_directory,
-    create_custom_directory,
-    format_oauth_link_text,
-    get_data_directory,
-    create_resume_records_file,
-    get_resume_records_file_path,
-    get_path_to_video_from_applicant_from_resume_records,
+    get_applicant_bot_records_file_path,
     get_tg_user_data_attribute_from_update_object,
-    create_data_directory,
-    create_oauth_link,
     get_decision_status_from_selected_callback_code,
-    update_user_records_with_top_level_key,
-    create_users_records_file, 
-    create_user_directory, 
-    create_vacancy_directory,
-    get_vacancy_directory,
-    create_resumes_directory_and_subdirectories,
-    create_record_for_new_resume_id_in_resume_records,
-    get_resume_recommendation_from_resume_records,
-    update_resume_record_with_top_level_key,
-    get_resume_directory,
-    create_record_for_new_user_in_records, 
-    get_access_token_from_callback_endpoint_resp,
-    get_access_token_from_records,
-    get_expires_at_from_callback_endpoint_resp,
-    create_json_file_with_dictionary_content,
-    get_target_vacancy_id_from_records,
-    get_target_vacancy_name_from_records,
-    get_reply_from_update_object,
-    get_list_of_passed_resume_ids_with_video,
-    get_list_of_passed_resume_ids_no_video,
-    get_negotiation_id_from_resume_record,
-    get_users_records_file_path,
-    create_tg_bot_link_for_applicant,
-    get_applicants_video_directory,
-)
-from services.auth_service import (
-    get_token_by_state,
-    callback_endpoint_healthcheck,
-    BOT_SHARED_SECRET,
-)
-from services.hh_service import (
-    get_user_info_from_hh, 
-    clean_user_info_received_from_hh,
-    get_employer_vacancies_from_hh,
-    filter_open_employer_vacancies,
-    get_vacancy_description_from_hh,
-    get_available_employer_states_and_collections_negotiations,
-    get_negotiations_by_collection,
-    get_negotiations_by_state,
-    get_negotiations_messages,
-    change_collection_status_of_negotiation,
-    send_negotiation_message,
-    get_negotiations_history,
-    get_resume_info,
-)
-from services.ai_service import (
-    analyze_vacancy_with_ai, 
-    format_vacancy_analysis_result_for_markdown,
-    analyze_resume_with_ai
 )
 from services.questionnaire_service import (
     ask_question_with_options, 
@@ -115,18 +50,9 @@ from services.questionnaire_service import (
     send_message_to_user,
     clear_all_unprocessed_keyboards
 )
-from task_queue import TaskQueue
-
-from services.scheduler_service import is_vacany_data_enough_for_resume_analysis
 
 
 from services.constants import *
-
-
-HH_CLIENT_ID = os.getenv("HH_CLIENT_ID")
-HH_CLIENT_SECRET = os.getenv("HH_CLIENT_SECRET")
-OAUTH_REDIRECT_URL = os.getenv("OAUTH_REDIRECT_URL")
-USER_AGENT = os.getenv("USER_AGENT")
 
 
 ########################################################
@@ -202,6 +128,13 @@ async def setup_new_applicant_command(update: Update, context: ContextTypes.DEFA
                 vacancy_id = payload_parts[1]
                 resume_id = payload_parts[2]
                 logger.debug(f"Parsed payload - resume_id: {resume_id}, vacancy_id: {vacancy_id}")
+
+                # ----- CHECK IF SUCH VACANCY exists in vacancy_records and STOP if not -----
+
+                vacancy_records_file_path = get_vacancy_directory(user_record_id=manager_user_id, vacancy_id=vacancy_id) 
+                if vacancy_records_file_path is None:
+                    await send_message_to_user(update, context, text=FAIL_TO_IDENTIFY_PAYLOAD_TEXT)
+                    return
 
                 # ----- UPDATE APPLICANT BOT RECORDS with PAYLOAD DATA -----
 
@@ -343,11 +276,10 @@ async def show_welcome_video_command(update: Update, context: ContextTypes.DEFAU
     applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
     manager_user_id = get_manager_user_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
     vacancy_id = get_vacancy_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
-    resume_id = get_resume_id_from_applicant_bot_records(applicant_record_id=applicant_user_id)
 
     # ----- CHECK IF WELCOME VIDEO is already shown and STOP if it is -----
 
-    if is_applicant_welcome_video_shown(applicant_record_id=applicant_user_id):
+    if is_welcome_video_shown_to_applicant(applicant_record_id=applicant_user_id):
         await send_message_to_user(update, context, text=SUCCESS_TO_GET_WELCOME_VIDEO_TEXT)
         return
 
@@ -367,6 +299,7 @@ async def show_welcome_video_command(update: Update, context: ContextTypes.DEFAU
     # ----- SEND WELCOME VIDEO to applicant -----
     
     await context.application.bot.send_video(chat_id=int(applicant_user_id), video=str(welcome_video_file_path))
+    update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="welcome_video_shown", value="yes")
     await asyncio.sleep(1)
     
     await ask_to_record_video_command(update=update, context=context)
@@ -375,28 +308,17 @@ async def show_welcome_video_command(update: Update, context: ContextTypes.DEFAU
 async def ask_to_record_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # TAGS: [user_related]
     """Ask to record video command. 
-    Called from: 'handle_vacancy_selection'.
+    Called from: 'show_welcome_video_command'.
     Triggers: nothing."""
 
     # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    target_vacancy_name = get_target_vacancy_name_from_records(record_id=bot_user_id)
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
 
     # ----- CHECK MUST CONDITIONS are met and STOP if not -----
 
-    if not is_privacy_policy_confirmed(bot_user_id=bot_user_id):
+    if not is_applicant_privacy_policy_confirmed(applicant_record_id=applicant_user_id):
         await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
-        return
-
-    if not is_vacancy_selected(record_id=bot_user_id):
-        logger.debug(f"'bot_user_id': {bot_user_id} doesn't have target vacancy selected.")
-        await send_message_to_user(update, context, text=MISSING_VACANCY_SELECTION_TEXT)
-        return
-
-    if is_welcome_video_recorded(record_id=bot_user_id):
-        logger.debug(f"'bot_user_id': {bot_user_id} already has welcome video recorded for vacancy '{target_vacancy_name}'.")
-        await send_message_to_user(update, context, text=SUCCESS_TO_RECORD_VIDEO_TEXT + f" Вакансия: '{target_vacancy_name}'.")
         return
 
     # ----- ASK USER IF WANTS TO RECORD or drop welcome video for the selected vacancy -----
@@ -409,7 +331,7 @@ async def ask_to_record_video_command(update: Update, context: ContextTypes.DEFA
     # Store button_text and callback_data options in context to use it later for button _text identification as this is not stored in "update.callback_query" object
     context.user_data["video_record_request_options"] = answer_options
     await ask_question_with_options(update, context, question_text=WELCOME_VIDEO_RECORD_REQUEST_TEXT, answer_options=answer_options)
-    logger.debug(f"Record video request question with options asked")
+    logger.debug(f"Record applicant's video request question with options asked")
 
 
 async def handle_answer_video_record_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -417,7 +339,7 @@ async def handle_answer_video_record_request(update: Update, context: ContextTyp
     """Handle button click. 
     Called from: nowhere.
     Triggers commands:
-    - If user agrees to record, sends instructions to shootv ideo command'.
+    - If user agrees to record, sends instructions to shoot video command'.
     - If user does not agree to record, triggers 'read_vacancy_description_command'.
 
     This is called AUTOMATICALLY by Telegram when a button is clicked (via CallbackQueryHandler).
@@ -429,7 +351,7 @@ async def handle_answer_video_record_request(update: Update, context: ContextTyp
 
     # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
     
     # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
 
@@ -443,7 +365,7 @@ async def handle_answer_video_record_request(update: Update, context: ContextTyp
     if not selected_callback_code:
         if update.callback_query and update.callback_query.message:
             logger.debug(f"No callback code found in update.callback_query.message")
-            await send_message_to_user(update, context, text="Не удалось определить ваш выбор. Попробуйте еще раз командой /ask_to_record_video.")
+            await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
         return
 
     logger.debug(f"Callback code found: {selected_callback_code}")
@@ -489,7 +411,7 @@ async def handle_answer_video_record_request(update: Update, context: ContextTyp
         video_record_request_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
         logger.debug(f"Video record request user decision: {video_record_request_user_decision}")
         # Update user records with selected vacancy data
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_record_agreed", value=video_record_request_user_decision)
+        update_applicant_bot_records_with_top_level_key(applicant_record_id=applicant_user_id, key="agreed_to_record_resume_video", value=video_record_request_user_decision)
         logger.debug(f"User records updated")
     
     # ----- PROGRESS THROUGH THE VIDEO FLOW BASED ON THE USER'S RESPONSE -----
@@ -502,17 +424,13 @@ async def handle_answer_video_record_request(update: Update, context: ContextTyp
         
         # ----- NOW HANDLER LISTENING FOR VIDEO from user -----
 
-        # this line just for info that handler will work from "create_manager_application" method in file "applicant_bot.py"
+        # this line just for info that handler will work from "create_applicant_application" method in file "applicant_bot.py"
         # once handler will be triggered, it will trigget "handle_video" method from file "services.video_service.py"
 
     # ----- IF USER CHOSE "NO" inform user about need to continue without video -----
 
     else:
-        await send_message_to_user(update, context, text=CONTINUE_WITHIOUT_WELCOME_VIDEO_TEXT)
-
-        # ----- READ VACANCY DESCRIPTION -----
-
-        await read_vacancy_description_command(update=update, context=context)
+        await send_message_to_user(update, context, text=CONTINUE_WITHIOUT_APPLICANT_VIDEO_TEXT)
 
 
 async def ask_confirm_sending_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -542,8 +460,8 @@ async def handle_answer_confrim_sending_video(update: Update, context: ContextTy
     
     # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    
     # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
 
     # Get the "callback_data" extracted from "update.callback_query" object created once button clicked
@@ -580,9 +498,7 @@ async def handle_answer_confrim_sending_video(update: Update, context: ContextTy
             await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
             return
         sending_video_confirmation_user_decision = get_decision_status_from_selected_callback_code(selected_callback_code=selected_callback_code)
-        # Update user records with selected vacancy data
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_video_sending_confirmed", value=sending_video_confirmation_user_decision)
-
+        
     # ----- IF USER CHOSE "YES" start video download  -----
 
     if sending_video_confirmation_user_decision == "yes":
@@ -599,10 +515,12 @@ async def handle_answer_confrim_sending_video(update: Update, context: ContextTy
             update=update,
             context=context,
             tg_file_id=file_id,
-            user_id=bot_user_id,
+            applicant_user_id=applicant_user_id,
             file_type=video_kind
         )
         await send_message_to_user(update, context, text=SUCCESS_TO_SAVE_VIDEO_TEXT)
+        await asyncio.sleep(1)
+        await send_message_to_user(update, context, text=INFO_ABOUT_VIDEO_DELETION_TEXT)
 
         # ----- UPDATE USER RECORDS with video status and path -----
         # skipping as updated in "download_incoming_video_locally" method
@@ -653,10 +571,10 @@ async def send_message_to_admin(application: Application, text: str, parse_mode:
         logger.error(f"Failed to send admin notification: {e}", exc_info=True)
 
 
-async def admin_get_list_of_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_get_list_of_applicants_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     #TAGS: [admin]
     """
-    Admin command to list all user IDs from user records.
+    Admin command to list all applicant IDs from applicant records.
     Only accessible to users whose ID is in the ADMIN_IDS whitelist.
     """
 
@@ -678,191 +596,20 @@ async def admin_get_list_of_users_command(update: Update, context: ContextTypes.
 
     # ----- SEND LIST OF USERS IDs from records -----
 
-    user_records = get_users_records_file_path()
-    with open(user_records, "r", encoding="utf-8") as f:
-        records = json.load(f)
-    user_ids = list(records.keys())
+    applicant_records_file_path = get_applicant_bot_records_file_path()
+    with open(applicant_records_file_path, "r", encoding="utf-8") as f:
+        applicant_records = json.load(f)
+    applicant_user_ids = list(applicant_records.keys())
 
-    await send_message_to_user(update, context, text=f"📋 List of users: {user_ids}")
+    await send_message_to_user(update, context, text=f"📋 List of applicant user IDs: {applicant_user_ids}")
 
 
-async def admin_update_negotiations_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_send_message_to_applicant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     #TAGS: [admin]
     """
-    Admin command to update negotiations for all users.
-    Only accessible to users whose ID is in the ADMIN_IDS whitelist.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    
-    #  ----- CHECK IF USER IS NOT AN ADMIN and STOP if it is -----
-
-    admin_id = os.getenv("ADMIN_ID", "")
-    if not admin_id:
-        await send_message_to_user(update, context, text="❌ Admin ID not configured.")
-        logger.error("ADMIN_ID environment variable is not set")
-        return
-    if bot_user_id != admin_id:
-        await send_message_to_user(update, context, text="❌ Unauthorized. Admin access required.")
-        logger.warning(f"Unauthorized admin command attempt from user {bot_user_id}. Allowed ID: {admin_id}")
-        return
-
-    # ----- UPDATE NEGOTIATIONS for all users -----
-
-    user_records = get_users_records_file_path()
-    with open(user_records, "r", encoding="utf-8") as f:
-        records = json.load(f)
-    user_ids = list(records.keys())
-    for user_id in user_ids:
-        if is_vacany_data_enough_for_resume_analysis(user_id=user_id):
-            await source_negotiations_triggered_by_admin_command(bot_user_id=user_id)
-        else:
-            logger.debug(f"User {user_id} is not ready for negotiations, resume source and analysis.")
-
-    await send_message_to_user(update, context, text=f"Negotiations updated for {len(user_ids)} users.")
-
-
-async def admin_get_fresh_resumes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    #TAGS: [admin]
-    """
-    Admin command to get fresh resumes for all users.
-    Only accessible to users whose ID is in the ADMIN_IDS whitelist.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    
-    #  ----- CHECK IF USER IS NOT AN ADMIN and STOP if it is -----
-
-    admin_id = os.getenv("ADMIN_ID", "")
-    if not admin_id:
-        await send_message_to_user(update, context, text="❌ Admin ID not configured.")
-        logger.error("ADMIN_ID environment variable is not set")
-        return
-    if bot_user_id != admin_id:
-        await send_message_to_user(update, context, text="❌ Unauthorized. Admin access required.")
-        logger.warning(f"Unauthorized admin command attempt from user {bot_user_id}. Allowed ID: {admin_id}")
-        return
-
-    # ----- SOURCE RESUMES for all users -----
-
-    user_records = get_users_records_file_path()
-    with open(user_records, "r", encoding="utf-8") as f:
-        records = json.load(f)
-    user_ids = list(records.keys())
-    for user_id in user_ids:
-        if is_vacany_data_enough_for_resume_analysis(user_id=user_id):
-            await source_resumes_triggered_by_admin_command(bot_user_id=user_id)
-        else:
-            logger.debug(f"User {user_id} is not ready for resume source and analysis.")
-            
-    await send_message_to_user(update, context, text=f"Fresh resumes sourced for {len(user_ids)} users.")
-
-
-async def admin_anazlyze_and_sort_resumes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    #TAGS: [admin]
-    """
-    Admin command to analyze fresh resumes for all users.
-    Only accessible to users whose ID is in the ADMIN_IDS whitelist.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    
-    #  ----- CHECK IF USER IS NOT AN ADMIN and STOP if it is -----
-
-    admin_id = os.getenv("ADMIN_ID", "")
-    if not admin_id:
-        await send_message_to_user(update, context, text="❌ Admin ID not configured.")
-        logger.error("ADMIN_ID environment variable is not set")
-        return
-    if bot_user_id != admin_id:
-        await send_message_to_user(update, context, text="❌ Unauthorized. Admin access required.")
-        logger.warning(f"Unauthorized admin command attempt from user {bot_user_id}. Allowed ID: {admin_id}")
-        return
-
-    # ----- CREATE TASKS for resume ananlysis for all users -----
-
-    user_records = get_users_records_file_path()
-    with open(user_records, "r", encoding="utf-8") as f:
-        records = json.load(f)
-    user_ids = list(records.keys())
-    for user_id in user_ids:
-        if is_vacany_data_enough_for_resume_analysis(user_id=user_id):
-            await analyze_resume_triggered_by_admin_command(bot_user_id=user_id)
-        else:
-            logger.debug(f"User {user_id} is not ready for resume source and analysis.")
-            
-    await send_message_to_user(update, context, text=f"Created tasks for resume ananlysis for {len(user_ids)} users.")
-
-
-async def admin_status_of_applicants_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    #TAGS: [admin]
-    """
-    Admin command to analyze fresh resumes for all users.
-    Only accessible to users whose ID is in the ADMIN_IDS whitelist.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-
-    #  ----- CHECK IF USER IS NOT AN ADMIN and STOP if it is -----
-
-    admin_id = os.getenv("ADMIN_ID", "")
-    if not admin_id:
-        await send_message_to_user(update, context, text="❌ Admin ID not configured.")
-        logger.error("ADMIN_ID environment variable is not set")
-        return
-    if bot_user_id != admin_id:
-        await send_message_to_user(update, context, text="❌ Unauthorized. Admin access required.")
-        logger.warning(f"Unauthorized admin command attempt from user {bot_user_id}. Allowed ID: {admin_id}")
-        return
-
-    # ----- UPDATE RESUME RECORDS with FRESH VIDEOS from applicants -----
-
-    await updated_resume_records_with_fresh_video_from_applicants_command(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, application=context.application) 
-
-
-async def admin_recommend_applicants_with_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    #TAGS: [admin]
-    """
-    Admin command to recommend applicants with video for all users.
-    Only accessible to users whose ID is in the ADMIN_IDS whitelist.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    
-    #  ----- CHECK IF USER IS NOT AN ADMIN and STOP if it is -----
-
-    admin_id = os.getenv("ADMIN_ID", "")
-    if not admin_id:
-        await send_message_to_user(update, context, text="❌ Admin ID not configured.")
-        logger.error("ADMIN_ID environment variable is not set")
-        return
-    if bot_user_id != admin_id:
-        await send_message_to_user(update, context, text="❌ Unauthorized. Admin access required.")
-        logger.warning(f"Unauthorized admin command attempt from user {bot_user_id}. Allowed ID: {admin_id}")
-        return
-
-    await recommend_resumes_with_video_command(bot_user_id=bot_user_id, application=context.application)
-
-    await send_message_to_user(update, context, text=f"Fresh videos pulled to applicants directory and resume_records updated with video statuses.")
-
-
-async def admin_send_message_to_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    #TAGS: [admin]
-    """
-    Admin command to send a message to a specific user by user_id (chat_id).
-    Usage: /admin_send_message <user_id> <message_text>
-    Usage example: /admin_send_message 7853115214 Привет! Как дела?
+    Admin command to send a message to a specific applicant by user_id (chat_id).
+    Usage: /admin_send_message_to_applicant <user_id> <message_text>
+    Usage example: /admin_send_message_to_applicant 7853115214 Привет! Как дела?
     Sends notification to admin if fails
     """
     
@@ -889,7 +636,7 @@ async def admin_send_message_to_user_command(update: Update, context: ContextTyp
             await send_message_to_user(
                 update, 
                 context, 
-                text="⚠️ Неверный формат команды.\nИспользование: /admin_send_message <user_id> <текст_сообщения>"
+                text="⚠️ Неверный формат команды.\nИспользование: /admin_send_message_to_applicant <user_id> <текст_сообщения>"
             )
             return
         
@@ -923,7 +670,7 @@ async def admin_send_message_to_user_command(update: Update, context: ContextTyp
             raise ValueError("Application or bot instance not available")
     
     except Exception as e:
-        logger.error(f"Failed to execute admin_send_message_to_user command: {e}", exc_info=True)
+        logger.error(f"Failed to execute admin_send_message_to_applicant command: {e}", exc_info=True)
         await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
         # Send notification to admin about the error
         if context.application:
@@ -934,876 +681,26 @@ async def admin_send_message_to_user_command(update: Update, context: ContextTyp
 
 
 
-
-
-
-
-async def select_vacancy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [vacancy_related]
-    """Asks users to select a vacancy to work with. 
-    Called from: 'pull_user_data_from_hh_command'.
-    Triggers: nothing.
-    Sends notification to admin if fails"""
-    
-    try:
-        # ----- IDENTIFY USER and pull required data from records -----
-
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-
-        # ----- CHECK IF Privacy confirmed and VACANCY is selected and STOP if it is -----
-
-        if not is_privacy_policy_confirmed(bot_user_id=bot_user_id):
-            await send_message_to_user(update, context, text=MISSING_PRIVACY_POLICY_CONFIRMATION_TEXT)
-            return
-
-        if is_vacancy_selected(record_id=bot_user_id):
-            await send_message_to_user(update, context, text=SUCCESS_TO_SELECT_VACANCY_TEXT)
-            return
-
-        # ----- PULL ALL OPEN VACANCIES from HH and enrich records with it -----
-
-        # Get open vacancies from HH.ru API
-        all_employer_vacancies = get_employer_vacancies_from_hh(access_token=access_token)
-        # Filter only open vacancies (id, name tuples)
-        vacancy_status = VACANCY_STATUS_TO_FILTER
-        # get nested dict with open vacancies {id: {id, name, status=open}}
-        open_employer_vacancies_dict = filter_open_employer_vacancies(vacancies_json=all_employer_vacancies, status_to_filter=vacancy_status)
-        
-        # If dict is empty => no open vacancies, inform user and raise exception
-        if not open_employer_vacancies_dict:
-            await send_message_to_user(update, context, text=FAILED_TO_GET_OPEN_VACANCIES_TEXT)
-            # Raise exception to be caught by outer try-except block (which will notify admin)
-            raise ValueError(f"No open vacancies found for user {bot_user_id}")
-
-        # ----- ASK USER what vacancy to work on -----
-
-        # Initialize options for user to select a vacancy (from JSON/dict)
-        # Build options (which will be tuples of (vacancy_name, vacancy_id)) from dict: key is vacancy_id, value is {id, name, ...}
-        answer_options = []
-        for vacancy_id, vacancy_data in open_employer_vacancies_dict.items():
-            if not vacancy_data:
-                continue
-            vacancy_name = vacancy_data.get("name")
-            if vacancy_name:
-                answer_options.append((vacancy_name, vacancy_id))
-        # Store options in context so handler can access them
-        context.user_data["vacancy_options"] = answer_options
-        await ask_question_with_options(update, context, question_text="Выберите c какой из вакансий вы хотите работать.", answer_options=answer_options)
-    
-    except Exception as e:
-        logger.error(f"Failed to select vacancy: {e}", exc_info=True)        # Send notification to admin about the error
-        if context.application:
-            await send_message_to_admin(
-                application=context.application,
-                text=f"⚠️ Error selecting vacancy: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-async def handle_answer_select_vacancy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [vacancy_related]
-    """Handle button click.
-    Called from: nowhere.
-    Triggers 'ask_to_record_video_command'.
-
-    Saves selected vacancy data to records, vacancy description and available employer_states_and_collections to vacancy directory.
-    This is called AUTOMATICALLY by Telegram when a button is clicked (via CallbackQueryHandler).
-    The options list should be stored in context.user_data["vacancy_options"] when asking the question.
-    
-    Note: Bot knows which user clicked because:
-    - update.effective_user.id contains the user ID (works for both messages and callbacks)
-    - context.user_data is automatically isolated per user by python-telegram-bot framework
-    Sends notification to admin if fails
-    """
-    
-    try:
-        # ----- IDENTIFY USER and pull required data from records -----
-        
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        
-        # ------- UNDERSTAND WHAT BUTTON was clicked and get "callback_data" from it -------
-
-        # Get the callback_data from the button click
-        callback_data = await handle_answer(update, context)
-
-        # ------- CREATE VACANCY DIRECTORY  for selected vacancy and NESTED RESUMES DIRECTORIES  -------
-
-        target_vacancy_id = str(callback_data)
-        if target_vacancy_id:
-            create_vacancy_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-            create_resumes_directory_and_subdirectories(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_subdirectories=RESUME_SUBDIRECTORIES_LIST)
-            create_resume_records_file(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-        else:
-            raise ValueError(f"No target_vacancy_id {target_vacancy_id} found in callback_data")
-        
-        # ----- PULL OPTIONS from context (stored when question asked) -----
-
-        # Get options from context (stored when question was asked)
-        answer_options=context.user_data.get("vacancy_options", [])
-        if not answer_options:
-            raise ValueError(f"No answer_options available in context")
-        
-        # ----- FIND SELECTED OPTION from options list and store it in variable -----
-
-        # Find the selected option
-        selected_option = None
-        for button_text, callback_code in answer_options:
-            # Compare as strings to avoid type mismatches (e.g., int vs str)
-            if str(callback_data) == str(callback_code):
-                selected_option = (button_text, callback_code)
-                # Clear vacancy options from "context" object, because now use "selected_option" variable instead
-                context.user_data.pop("vacancy_options", None)
-                break
-
-        # ----- UPDATE USER RECORDS with selected vacancy data and infrom user -----
-
-        # Now you can use callback_data or selected_option for your logic
-        if update.callback_query and update.callback_query.message:
-            vacancy_name_value = selected_option[0]
-            vacancy_id_value = selected_option[1]
-            # Update user records with selected vacancy data
-            update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_selected", value="yes")
-            update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_name", value=vacancy_name_value)
-            update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_id", value=vacancy_id_value)
-            # Inform user that selected vacancy is being processed
-            if selected_option:
-                vacancy_name, vacancy_id = selected_option
-                await send_message_to_user(update, context, text=f"Вы выбрали вакансию:\n'{vacancy_name}'\n ID: '{vacancy_id}'")
-                await asyncio.sleep(2)
-
-        # ----- ASK USER to record welcome video -----
-
-        await ask_to_record_video_command(update=update, context=context)
-    
-
-    except Exception as e:
-        logger.error(f"Failed to handle answer select vacancy: {e}", exc_info=True)
-        await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-        # Send notification to admin about the error
-        if context.application:
-            await send_message_to_admin(
-                application=context.application,
-                text=f"⚠️ Error handling answer select vacancy: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-async def read_vacancy_description_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [vacancy_related]
-    """Read vacancy description and save it. 
-    Called from: 'download_incoming_video_locally' from file "services.video_service.py".
-    Triggers: 'define_sourcing_criterias_command'.
-    Sends notification to admin if fails"""
-    
-    try:
-        # ----- IDENTIFY USER and pull required data from records -----
-        
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-        target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-        target_vacancy_name = get_target_vacancy_name_from_records(record_id=bot_user_id)
-
-
-        # ----- IF FILE with VACANCY DESCRIPTION already exists then SKIP PULLING it from HH -----
-
-        vacancy_data_dir = get_vacancy_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-        vacancy_description_file_path = vacancy_data_dir / "vacancy_description.json"
-        if vacancy_description_file_path.exists():
-            logger.warning(f"Vacancy description file already exists: {vacancy_description_file_path}")
-            return
-
-        # ----- PULL VACANCY DESCRIPTION from HH and save it to file -----
-
-        vacancy_description = get_vacancy_description_from_hh(access_token=access_token, vacancy_id=target_vacancy_id)
-        if vacancy_description is None:
-            logger.error(f"Failed to get vacancy description from HH: {target_vacancy_name}")
-            return
-        
-        await send_message_to_user(update, context, text=f"Читаю описание вакансии '{target_vacancy_name}'.")
-        
-        # ----- SAVE VACANCY DESCRIPTION to file and update records -----
-
-        create_json_file_with_dictionary_content(file_path=vacancy_description_file_path, content_to_write=vacancy_description)
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_description_recieved", value="yes")
-        
-        # ----- TRIGGER DEFINE SOURCING CRITERIAS COMMAND -----
-
-        await define_sourcing_criterias_command(update=update, context=context)
-    
-    except Exception as e:
-        logger.error(f"Failed to read vacancy description: {e}", exc_info=True)
-        await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-        # Send notification to admin about the error
-        if context.application:
-            await send_message_to_admin(
-                application=context.application,
-                text=f"⚠️ Error reading vacancy description: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-async def define_sourcing_criterias_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [vacancy_related]
-    """Prepare everything for vacancy description analysis and 
-    create TaksQueue job to get sourcing criteria from AI and save it to file.
-    Called from: 'read_vacancy_description_command'.
-    Triggers: nothing.
-    """
-    
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-
-    # ----- CHECK IF SOURCING CRITERIA is already derived and STOP if it is -----
-
-    if is_sourcing_criterias_file_exists(record_id=bot_user_id, vacancy_id=target_vacancy_id):
-        await send_message_to_user(update, context, text=SUCCESS_TO_GET_SOURCING_CRITERIAS_TEXT)
-        return
-
-    # ----- DO AI ANALYSIS of the vacancy description  -----
-
-    # Get files paths for AI analysis
-    vacancy_data_dir = get_vacancy_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    vacancy_description_file_path = vacancy_data_dir / "vacancy_description.json"
-    prompt_file_path = Path(PROMPT_DIR) / "for_vacancy.txt"
-
-    await send_message_to_user(update, context, text="Анализирую вакансию. Это может занять некоторое время. Я нашипу в чат когда будет готово.")
-
-    # Load inputs for AI analysis
-    with open(vacancy_description_file_path, "r", encoding="utf-8") as f:
-        vacancy_description = json.load(f)
-    with open(prompt_file_path, "r", encoding="utf-8") as f:
-        prompt_text = f.read()
-
-
-    # Add AI analysis task to queue
-    await ai_task_queue.put(
-        get_sourcing_criterias_from_ai_and_save_to_file,
-        vacancy_description,
-        prompt_text,
-        vacancy_data_dir,
-        update,
-        context,
-        task_id=f"vacancy_analysis_{bot_user_id}_{target_vacancy_id}"
-    )
-
-
-async def get_sourcing_criterias_from_ai_and_save_to_file(
-    vacancy_description: dict,
-    prompt_text: str,
-    vacancy_data_dir: Path,
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-    # TAGS: [vacancy_related]
-    """
-    Wrapper function to process vacancy analysis result.
-    This function is executed through TaskQueue.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-
-    try:
-        
-        # ----- CALL AI ANALYZER -----
-
-        vacancy_analysis_result = analyze_vacancy_with_ai(
-            vacancy_data=vacancy_description,
-            prompt_vacancy_analysis_text=prompt_text
-        )
-        
-        # ----- SAVE SOURCING CRITERIAS to file and update records -----
-
-        sourcing_file_path = Path(vacancy_data_dir) / "sourcing_criteria.json"
-        with open(sourcing_file_path, "w", encoding="utf-8") as f:
-            json.dump(vacancy_analysis_result, f, ensure_ascii=False, indent=2)
-        
-        update_user_records_with_top_level_key(record_id=bot_user_id, key="vacancy_sourcing_criterias_recieved", value="yes")
-
-        # Format and send result to user
-        formatted_result = format_vacancy_analysis_result_for_markdown(str(sourcing_file_path))
-        await send_message_to_user(
-            update,
-            context,
-            text=f"Проанализировал вакансию и буду отбирать кандидатов по следующим критериям:\n\n{formatted_result}",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to process vacancy analysis: {e}", exc_info=True)        # Send notification to admin about the error
-        if context.application:
-            await send_message_to_admin(
-                application=context.application,
-                text=f"⚠️ Error getting sourcing criterias from AI: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-
-
-########################################################################################
-# ------------ COMMANDS EXECUTED on ADMIN request ------------
-########################################################################################
-
-
-async def source_negotiations_triggered_by_admin_command(bot_user_id: str) -> None:
-    # TAGS: [resume_related]
-    """Sources negotiations collection."""
-    
-    # ----- IDENTIFY USER and pull required data from records -----
-    
-    access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-
-    # ----- IMPORTANT: do not check if NEGOTIATIONS COLLECTION file exists, we update it every time -----
-
-    # ----- PULL COLLECTIONS of negotiations and save it to file -----
-
-    #Define what employer_state to use for pulling the collection
-    target_employer_state = TARGET_EMPLOYER_STATE_COLLECTION_STATUS
-    #Build path to the file for the collection of negotiations data
-    vacancy_data_dir = get_vacancy_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    negotiations_collection_file_path = vacancy_data_dir / f"negotiations_collections_{target_employer_state}.json"
-    
-    #Get collection of negotiations data for the target collection status "consider"
-    negotiations_collection_data = get_negotiations_by_collection(access_token=access_token, vacancy_id=target_vacancy_id, collection=target_employer_state)
-    # Write negotiations data JSON into negotiations_file_path
-    # If file already exists, it will be overwritten.
-    create_json_file_with_dictionary_content(file_path=str(negotiations_collection_file_path), content_to_write=negotiations_collection_data)
-
-
-async def source_resumes_triggered_by_admin_command(bot_user_id: str) -> None:
-    # TAGS: [resume_related]
-    """Sources resumes from negotiations."""
-    
-    # ----- IDENTIFY USER and pull required data from records -----
-    
-    access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-    target_employer_state = TARGET_EMPLOYER_STATE_COLLECTION_STATUS
-    
-    # ----- CHECK IF NEGOTIATIONS COLLECTION file exists, otherwise trigger source negotiations command -----
-    
-    if not is_negotiations_collection_file_exists(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, target_employer_state=target_employer_state):
-        return
-
-    # ----- CHECK IF RESUME RECORDS file exists, otherwise trigger source resumes command -----
-    
-    if not is_resume_records_file_exists(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id):
-        create_resumes_directory_and_subdirectories(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_subdirectories=RESUME_SUBDIRECTORIES_LIST)
-        create_resume_records_file(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-
-    # ----- SOURCE RESUMES IDs from negotiations collection -----
-
-    #Build path to the file for the collection of negotiations data
-    vacancy_data_dir = get_vacancy_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    negotiations_collection_file_path = vacancy_data_dir / f"negotiations_collections_{target_employer_state}.json"
-    #Open negotiations collection data file and get resumes IDs
-    with open(negotiations_collection_file_path, "r", encoding="utf-8") as f:
-        negotiations_collection_data = json.load(f)
-    resume_ids_from_negotiations_collection = []
-    tmp_resume_id_and_negotiation_id_dict = {}
-    for negotiations_collection_item in negotiations_collection_data["items"]:
-        #add resume_id to the list
-        resume_ids_from_negotiations_collection.append(negotiations_collection_item["resume"]["id"])
-        #key is resume_id, value is negotiation_id - required for updating resume records file and send message to the user
-        tmp_resume_id_and_negotiation_id_dict[negotiations_collection_item["resume"]["id"]] = negotiations_collection_item["id"]
-    logger.debug(f"tmp_negotiation_id_dict: {tmp_resume_id_and_negotiation_id_dict}")
-    logger.debug(f"resume_ids: {resume_ids_from_negotiations_collection}")
-
-    # ----- COLLECT RESUMES IDs from resume records -----
-    
-    # Create empty list of resume IDs from resume_records.json
-    resumes_ids_in_resume_records = []
-    # Get resume records file path and read existing resume IDs
-    resume_records_file_path = get_resume_records_file_path(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    with open(resume_records_file_path, "r", encoding="utf-8") as f:
-        resume_records = json.load(f)
-        # Append all resume_ids (keys) from resume_records.json to the list
-        resumes_ids_in_resume_records = list(resume_records.keys())
-    
-    # ----- FILTER ONLY FRESH RESUMES IDs not existing in resume records -----
-
-    # Compare and exclude resume_ids that already exist in resume_records
-    fresh_resume_ids_list = []
-    for resume_id in resume_ids_from_negotiations_collection:
-        if resume_id not in resumes_ids_in_resume_records:
-            fresh_resume_ids_list.append(resume_id)
-    logger.debug(f"New resume IDs to process: {fresh_resume_ids_list}")
-
-    # ----- PREPARE RESUME directory for 'new' resumes -----
-
-    resume_data_dir = get_resume_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    #Get path to the directory for new resumes
-    new_resume_data_dir = Path(resume_data_dir) / "new"
-
-    # ----- DOWNLOAD RESUMES from HH.ru to "new" resumes -----
-
-    #Download resumes from HH.ru and save to file
-    for resume_id in fresh_resume_ids_list:
-        resume_file_path = new_resume_data_dir / f"resume_{resume_id}.json"
-        resume_data = get_resume_info(access_token=access_token, resume_id=resume_id)
-        # Write resume data JSON into resume_file_path
-        create_json_file_with_dictionary_content(file_path=str(resume_file_path), content_to_write=resume_data)
-
-        # ----- UPDATE RESUME_RECORDS file with new resume_record_id and contact data -----
-
-        #Create new resume record in resume records file with specific structure
-        create_record_for_new_resume_id_in_resume_records(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id)
- 
-         # ----- ENRICH RESUME_RECORDS file with resume data -----
-
-        # Update resume records with new resume data
-        negotiation_id = tmp_resume_id_and_negotiation_id_dict[resume_id]
-        first_name = resume_data["first_name"]
-        last_name = resume_data["last_name"]
-        phone = resume_data["contact"][0]["value"]["formatted"]
-        email = resume_data["contact"][1]["value"]
-        update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id, key="negotiation_id", value=negotiation_id)
-        update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id, key="first_name", value=first_name)
-        update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id, key="last_name", value=last_name)
-        update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id, key="phone", value=phone)
-        update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id, key="email", value=email)
-
-    logger.info(f"Found {len(fresh_resume_ids_list)} new resumes")
-
-
-async def analyze_resume_triggered_by_admin_command(bot_user_id: str) -> None:
-    # TAGS: [resume_related]
-    """Analyzes resume with AI. 
-    Sorts resumes into "passed" or "failed" directories based on the final score. 
-    Triggers 'send_message_to_applicants_command' and 'change_employer_state_command' for each resume.
-    Does not trigger any other commands once done.
-    """
-
-    # ----- IDENTIFY USER and pull required data from records -----
-    
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-
-    # ----- PREPARE paths and files for AI analysis -----
-
-    #Get files paths for AI analysis
-    vacancy_data_dir = get_vacancy_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    vacancy_description_file_path = vacancy_data_dir / "vacancy_description.json"
-    sourcing_criterias_file_path = vacancy_data_dir / "sourcing_criterias.json"
-    resume_analysis_prompt_file_path = Path(PROMPT_DIR) / "for_resume.txt"
-    resume_data_dir = get_resume_directory(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    new_resume_data_path = Path(resume_data_dir) / "new"
-    passed_resume_data_path = Path(resume_data_dir) / "passed"
-    failed_resume_data_path = Path(resume_data_dir) / "failed"
-
-    # Load inputs for AI analysis
-    with open(vacancy_description_file_path, "r", encoding="utf-8") as f:
-        vacancy_description = json.load(f)
-    with open(sourcing_criterias_file_path, "r", encoding="utf-8") as f:
-        sourcing_criterias = json.load(f)
-    with open(resume_analysis_prompt_file_path, "r", encoding="utf-8") as f:
-        resume_analysis_prompt = f.read() 
-
-    # ----- QUEUE RESUMES for AI ANALYSIS -----
-
-    # Add resumes to AI analysis queue
-    try:
-        new_resume_data_path.mkdir(parents=True, exist_ok=True)
-        new_resume_json_paths_list = list(new_resume_data_path.glob("*.json"))
-        num_of_new_resumes = len(new_resume_json_paths_list)
-        logger.debug(f"Total resumes: {num_of_new_resumes} in directory {new_resume_data_path}")
-        queued_resumes = 0
-        # Open each resume file and add AI analysis task to queue
-        for resume_json_path in new_resume_json_paths_list:
-            resume_id = resume_json_path.stem.split("_")[1]
-            try:
-                with open(resume_json_path, "r", encoding="utf-8") as rf:
-                    resume_json = json.load(rf)
-                
-                # Add AI analysis task to queue
-                await ai_task_queue.put(
-                    resume_analysis_from_ai_to_user_sort_resume,
-                    bot_user_id,
-                    target_vacancy_id,
-                    vacancy_description,
-                    sourcing_criterias,
-                    resume_id,
-                    resume_json_path,
-                    resume_json,
-                    resume_analysis_prompt,
-                    passed_resume_data_path,
-                    failed_resume_data_path,
-                    task_id=f"resume_analysis_{bot_user_id}_{target_vacancy_id}_{resume_id}"
-                )
-                queued_resumes += 1
-                logger.info(f"Added resume {resume_id} to analysis queue. Total queued: {queued_resumes} out of {num_of_new_resumes}")
-            except Exception as inner_e:
-                logger.error(f"Failed to queue resume analysis for '{resume_json_path}': {inner_e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Failed to queue resumes for analysis in directory {new_resume_data_path}: {e}", exc_info=True)
-
-    # ----- COMMUNICATE RESULT of QUEUING RESUMES -----
-    logger.info(f"Added {queued_resumes} out of {num_of_new_resumes} resumes to analysis queue. Analysis is performed in background.")
-
-
-async def resume_analysis_from_ai_to_user_sort_resume(
-    bot_user_id: str,
-    target_vacancy_id: str,
-    vacancy_description: dict,
-    sourcing_criterias: dict,
-    resume_id: str,
-    resume_json_path: Path,
-    resume_json: dict,
-    resume_analysis_prompt: str,
-    passed_resume_data_path: Path,
-    failed_resume_data_path: Path,
-    ) -> None:
-    """
-    Wrapper function to process resume analysis result.
-    This function is executed through TaskQueue.
-    """
-    try:
-        # Call AI analyzer
-        ai_analysis_result = analyze_resume_with_ai(
-            vacancy_description=vacancy_description,
-            sourcing_criterias=sourcing_criterias,
-            resume_data=resume_json,
-            prompt_resume_analysis_text=resume_analysis_prompt
-        )
-        
-        # Update resume records with AI analysis results
-        update_resume_record_with_top_level_key(
-            bot_user_id=bot_user_id,
-            vacancy_id=target_vacancy_id,
-            resume_record_id=resume_id,
-            key="ai_analysis",
-            value=ai_analysis_result
-        )
-        
-        # Send message to applicant
-        await send_message_to_applicant_command(bot_user_id=bot_user_id, resume_record_id=resume_id)
-        
-        # Change employer state
-        await change_employer_state_command(bot_user_id=bot_user_id, resume_record_id=resume_id)
-        
-        # Sort resume based on final score
-        resume_final_score = int(ai_analysis_result.get("final_score", 0))
-        if resume_final_score >= RESUME_PASSED_SCORE:
-            shutil.move(resume_json_path, passed_resume_data_path)
-            update_resume_record_with_top_level_key(
-                bot_user_id=bot_user_id,
-                vacancy_id=target_vacancy_id,
-                resume_record_id=resume_id,
-                key="resume_sorting_status",
-                value="passed"
-            )
-        else:
-            shutil.move(resume_json_path, failed_resume_data_path)
-            update_resume_record_with_top_level_key(
-                bot_user_id=bot_user_id,
-                vacancy_id=target_vacancy_id,
-                resume_record_id=resume_id,
-                key="resume_sorting_status",
-                value="failed"
-            )
-                   
-    except Exception as e:
-        logger.error(f"Failed to process resume analysis for {resume_id}: {e}", exc_info=True)
-
-
-async def send_message_to_applicant_command(bot_user_id: str, resume_id: str) -> None:
-    # TAGS: [resume_related]
-    """Sends message to applicant. Triggers 'change_employer_state_command'."""
-    
-    # ----- IDENTIFY USER and pull required data from records -----
-    
-    access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-
-    # ----- SEND MESSAGE TO APPLICANT  -----
-
-    # Get negotiation ID from resume record
-    negotiation_id = get_negotiation_id_from_resume_record(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id)
-    # Create Telegram bot link for applicant
-    tg_link = create_tg_bot_link_for_applicant(vacancy_id=target_vacancy_id, resume_id=resume_id)
-    negotiation_message_text = APPLICANT_MESSAGE_TEXT_WITHOUT_LINK + f"{tg_link}"
-    logger.debug(f"Sending message to applicant for negotiation ID: {negotiation_id}")
-    try:
-        send_negotiation_message(access_token=access_token, negotiation_id=negotiation_id, user_message=negotiation_message_text)
-        logger.info(f"Message to applicant for negotiation ID: {negotiation_id} has been successfully sent")
-    except Exception as send_err:
-        logger.error(f"Failed to send message for negotiation ID {negotiation_id}: {send_err}", exc_info=True)
-        # stop method execution in this case, because no need to update resume_records and negotiations status
-        return
-
-    # ----- UPDATE RESUME_RECORDS file with new status of request to shoot resume video -----
-
-    new_status_of_request_to_shoot_resume_video = "yes"
-    update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id, key="is_request_to_shoot_resume_video_sent", value=new_status_of_request_to_shoot_resume_video)
-
-
-async def change_employer_state_command(bot_user_id: str, resume_id: str) -> None:
-    # TAGS: [resume_related]
-    """Trigger send message to applicant command handler - allows users to send message to applicant."""
-    
-    # ----- IDENTIFY USER and pull required data from records -----
-    
-    access_token = get_access_token_from_records(bot_user_id=bot_user_id)
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-    negotiation_id = get_negotiation_id_from_resume_record(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id)
-
-   # ----- CHANGE EMPLOYER STATE  -----
-
-    #await update.message.reply_text(f"Изменяю статус приглашения кандидата на {NEW_EMPLOYER_STATE}...")
-    logger.debug(f"Changing collection status of negotiation ID: {negotiation_id} to {NEW_EMPLOYER_STATE_COLLECTION_STATUS}")
-    try:
-        change_collection_status_of_negotiation(
-            access_token=access_token,
-            negotiation_id=negotiation_id,
-            collection_name=TARGET_EMPLOYER_STATE_COLLECTION_STATUS,
-            new_state=NEW_EMPLOYER_STATE_COLLECTION_STATUS
-        )
-        logger.info(f"Collection status of negotiation ID: {negotiation_id} has been successfully changed to {NEW_EMPLOYER_STATE_COLLECTION_STATUS}")
-    except Exception as status_err:
-        logger.error(f"Failed to change collection status for negotiation ID {negotiation_id}: {status_err}", exc_info=True)
-
-
-async def updated_resume_records_with_fresh_video_from_applicants_command(bot_user_id: str, vacancy_id: str, application: Optional[Application] = None) -> None:
-    # TAGS: [resume_related]
-    """Update resume records with fresh videos from applicants directory.
-    Sends notification to admin if fails"""
-    
-    try:
-        # ----- PREPARE PATHS to video files -----
-
-        video_from_applicants_dir = get_directory_for_video_from_applicants(bot_user_id=bot_user_id, vacancy_id=vacancy_id)
-        all_video_paths_list = list(video_from_applicants_dir.glob("*.mp4"))
-        fresh_videos_list = []
-        
-        for video_path in all_video_paths_list:
-            # Parse video path to get resume ID. Video shall have the following structure: 
-              # applicant_{user_id}_vacancy_{target_vacancy_id}_resume_{resume_id}_time_{timestamp}_note.mp4
-            resume_id = video_path.stem.split("_")[5]
-            logger.debug(f"Checking if applicant video is recorded. Video path: {video_path} / Resume ID: {resume_id}")
-            # If video not recorded, update list and update resume records
-            if not is_applicant_video_recorded(bot_user_id=bot_user_id, vacancy_id=vacancy_id, resume_id=resume_id):
-                fresh_videos_list.append(resume_id)
-                update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=vacancy_id, resume_record_id=resume_id, key="is_resume_video_received", value="yes")
-                update_resume_record_with_top_level_key(bot_user_id=bot_user_id, vacancy_id=vacancy_id, resume_record_id=resume_id, key="resume_video_path", value=video_path)
-        
-        logger.debug(f"{len(fresh_videos_list)} fresh videos have been found and updated in resume records")
-    
-    except Exception as e:
-        logger.error(f"Failed to update resume records with fresh videos from applicants: {e}", exc_info=True)
-        # Send notification to admin about the error
-        if application:
-            await send_message_to_admin(
-                application=application,
-                text=f"⚠️ Error updating resume records with fresh videos: {e}\nUser ID: {bot_user_id}\nVacancy ID: {vacancy_id}"
-            )
-
-
-async def recommend_resumes_with_video_command(bot_user_id: str, application: Application) -> None:
-    # TAGS: [recommendation_related]
-    """Recommend resumes that have not yet been sent to the manager (with video).
-    Sends notification to admin if fails"""
-    
-    try:
-
-      # ----- VALIDATE VACANCY IS SELECTED and has description and sourcing criterias exist -----
-
-        validations = [
-            (is_vacancy_selected, MISSING_VACANCY_SELECTION_TEXT, "no open vacancies found"),
-            (is_vacancy_description_recieved, MISSING_VACANCY_DESCRIPTION_TEXT, "vacancy description is not received"),
-            (is_vacancy_sourcing_criterias_recieved, MISSING_SOURCING_CRITERIAS_TEXT, "sourcing criterias are not received"),
-        ]
-        
-        for check_func, error_text, error_reason in validations:
-            if not check_func(record_id=bot_user_id):
-                if application and application.bot:
-                    await application.bot.send_message(chat_id=int(bot_user_id), text=error_text)
-                raise ValueError(f"Cannot recommend resumes, because {error_reason} for user {bot_user_id}")
-
-        # ----- IDENTIFY USER and pull required data from records -----
-        
-        target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-        target_vacancy_name = get_target_vacancy_name_from_records(record_id=bot_user_id)
-
-
-        # ----- GET LIST of RESUME IDs that have not been recommended yet -----
-
-        passed_resume_ids_with_video = get_list_of_passed_resume_ids_with_video(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-        logger.debug(f"List of resume IDs with video: {passed_resume_ids_with_video}")
-
-        # ----- COMMUNICATE SUMMARY of recommendation -----
-
-        num_of_passed_resume_ids_with_video = len(passed_resume_ids_with_video)
-        # if there are no suitable applicants, communicate the result
-        if num_of_passed_resume_ids_with_video == 0:
-            if application and application.bot:
-                await application.bot.send_message(chat_id=int(bot_user_id), text=f"Вакансия: '{target_vacancy_name}.\nВ настоящее время нет подходящих кандидатов, записавших видео визитку.")
-            else:
-                logger.warning(f"Cannot send message to user {bot_user_id}: application or bot instance not provided")
-            return
-
-        summary_text = (
-                f"Вакансия '{target_vacancy_name}'\n"
-                f"Могу порекомендовать '{num_of_passed_resume_ids_with_video}' подходящих кандидатов, записавших видео визитки."
-            )
-        if application and application.bot:
-            await application.bot.send_message(chat_id=int(bot_user_id), text=summary_text, parse_mode=ParseMode.HTML)
-            await asyncio.sleep(1)
-        else:
-            logger.warning(f"Cannot send message to user {bot_user_id}: application or bot instance not provided")
-        await asyncio.sleep(1)
-
-        # ----- COMMUNICATE RESULT of resumes with video -----
-
-        #set counter to number the recommendations
-        recommendation_num = 1
-        # build text based on data from resume records
-        for resume_id in passed_resume_ids_with_video:
-
-            # ----- GET RECOMMENDATION TEXT and VIDEO PATH for each applicant -----
-
-            # Get recommendation text for each applicant
-            recommendation_title = f"<b>Рекомендация #{recommendation_num}</b>\n"
-            recommendation_body = get_resume_recommendation_from_resume_records(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id)
-            recommendation_text = f"{recommendation_title}{recommendation_body}"
-
-            # Get video file path for each applicant
-            applicant_video_file_path = get_path_to_video_from_applicant_from_resume_records(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id, resume_record_id=resume_id)
-
-            # ----- SEND RECOMMENDATION TEXT and VIDEO for each applicant -----
-            
-            if application and application.bot:
-                await application.bot.send_message(chat_id=int(bot_user_id), text=recommendation_text, parse_mode=ParseMode.HTML)
-                if applicant_video_file_path:
-                    await application.bot.send_video(chat_id=int(bot_user_id), video=str(applicant_video_file_path))
-                    logger.info(f"Video for resume {resume_id} has been successfully sent to user {bot_user_id}")
-                    
-                    # ----- SEND BUTTON TO INVITE APPLICANT TO INTERVIEW -----
-                    # cannot use "questionnaire_service.py", because requires update and context objects
-                    
-                    # Create inline keyboard with invite button
-                    invite_button = InlineKeyboardButton(
-                        text=BTN_INVITE_TO_INTERVIEW,
-                        callback_data=f"{INVITE_TO_INTERVIEW_CALLBACK_PREFIX}:{bot_user_id}:{target_vacancy_id}:{resume_id}"
-                    )
-                    keyboard = InlineKeyboardMarkup([[invite_button]])
-                    await application.bot.send_message(
-                        chat_id=int(bot_user_id),
-                        reply_markup=keyboard
-                    )
-                else:
-                    raise ValueError(f"Cannot send video to user {bot_user_id}: video file not found for resume {resume_id}")
-            else:
-                logger.warning(f"Cannot send message to user {bot_user_id}: application or bot instance not provided")
-            recommendation_num += 1
-    
-    except Exception as e:
-        logger.error(f"Failed to recommend resumes with video: {e}", exc_info=True)
-        if application and application.bot:
-            await application.bot.send_message(chat_id=int(bot_user_id), text=FAIL_TECHNICAL_SUPPORT_TEXT)
-        # Send notification to admin about the error
-        if application:
-            await send_message_to_admin(
-                application=application,
-                text=f"⚠️ Error recommending resumes with video: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-async def handle_invite_to_interview_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # TAGS: [recommendation_related]
-    """Handle invite to interview button click. Sends notification to admin.
-    Sends notification to admin if fails"""
-    
-    if not update.callback_query:
-        return
-    
-    try:
-        # ----- IDENTIFY USER and pull required data from callback -----
-        
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        
-        # Use handle_answer() from questionnaire_service to extract callback_data and handle keyboard removal
-        callback_data = await handle_answer(update, context, remove_keyboard=True)
-        
-        if not callback_data or not callback_data.startswith(INVITE_TO_INTERVIEW_CALLBACK_PREFIX):
-            raise ValueError(f"Invalid callback_data for invite to interview: {callback_data}")
-
-
-        # ----- EXTRACT DATA from callback_data -----
-
-        parts = callback_data.split(":")
-        if len(parts) != 4:
-            raise ValueError(f"Invalid callback_data format for invite to interview: {callback_data}")
-        
-        # Unpack (destruct) tuple to assign values from a list to variables.
-        callback_prefix, user_id, vacancy_id, resume_id = parts
-        vacancy_name = get_target_vacancy_name_from_records(record_id=user_id)
-
-        # ----- SEND NOTIFICATION TO ADMIN -----
-            
-        if context.application:
-            admin_message = (
-                f"📞 Пользователь {user_id}.\n"
-                f"хочет пригласить кандидата {resume_id} на интервью.\n"
-                f"Вакансия: {vacancy_id}: {vacancy_name}.\n"
-                f"Резюме кандидата: {resume_id}."
-            )
-            await send_message_to_admin(
-                application=context.application,
-                text=admin_message
-            )
-            
-            # Confirm to user (keyboard already removed by handle_answer())
-            await send_message_to_user(update, context, text=INVITE_TO_INTERVIEW_SENT_TEXT)
-        else:
-            raise ValueError(f"Invalid callback_data format for invite to interview: {callback_data}")
-    except Exception as e:
-        logger.error(f"Failed to handle invite to interview: {e}", exc_info=True)
-        await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
-        # Send notification to admin about the error
-        if context.application:
-            await send_message_to_admin(
-                application=context.application,
-                text=f"⚠️ Error handling invite to interview: {e}\nUser ID: {bot_user_id if 'bot_user_id' in locals() else 'unknown'}"
-            )
-
-
-
 ########################################################################################
 # ------------ MAIN MENU related commands ------------
 ########################################################################################
 
-async def user_status(bot_user_id: str) -> dict:
+async def user_status(applicant_user_id: str) -> dict:
     status_dict = {}
-    status_dict["bot_authorization"] = is_user_in_records(record_id=bot_user_id)
-    status_dict["privacy_policy_confirmation"] = is_privacy_policy_confirmed(bot_user_id=bot_user_id)
-    status_dict["hh_authorization"] = is_user_authorized(record_id=bot_user_id)
-    status_dict["vacancy_selection"] = is_vacancy_selected(record_id=bot_user_id)
-    status_dict["welcome_video_recording"] = is_welcome_video_recorded(record_id=bot_user_id)
-    target_vacancy_id = get_target_vacancy_id_from_records(record_id=bot_user_id)
-    # depends on vacancy selection
-    if target_vacancy_id: # not None
-        status_dict["vacancy_description_recieved"] = is_vacancy_description_recieved(record_id=bot_user_id)
-        status_dict["sourcing_criterias_recieved"] = is_vacancy_sourcing_criterias_recieved(record_id=bot_user_id)
-        status_dict["resume_records_file_not_empty"] = is_resume_records_file_not_empty(bot_user_id=bot_user_id, vacancy_id=target_vacancy_id)
-    else:
-        status_dict["vacancy_description_recieved"] = False
-        status_dict["sourcing_criterias_recieved"] = False
-        status_dict["resume_records_file_not_empty"] = False
+    status_dict["bot_authorization"] = is_applicant_in_applicant_bot_records(applicant_record_id=applicant_user_id)
+    status_dict["privacy_policy_confirmation"] = is_applicant_privacy_policy_confirmed(applicant_record_id=applicant_user_id)
+    status_dict["welcome_video_shown"] = is_welcome_video_shown_to_applicant(applicant_record_id=applicant_user_id)
+    status_dict["resume_video_recorded"] = is_resume_video_received(applicant_record_id=applicant_user_id)
     return status_dict
 
 
-async def build_user_status_text(bot_user_id: str, status_dict: dict) -> str:
+async def build_user_status_text(status_dict: dict) -> str:
 
     status_to_text_transcription = {
         "bot_authorization": " Авторизация в боте.",
         "privacy_policy_confirmation": " Согласие на обработку перс. данных.",
-        "hh_authorization": " Авторизация в HeadHunter.",
-        "vacancy_selection": " Выбор вакансии.",
-        "welcome_video_recording": " Приветственное видео.",
-        "vacancy_description_recieved": " Описание вакансии.",
-        "sourcing_criterias_recieved": " Критерии отбора.",
-        "resume_records_file_not_empty": " Резюме в работе.",
+        "welcome_video_shown": " Просмотр приветственного видео менеджера.",
+        "resume_video_recorded": " Запись видео-визитки."
     }
     status_images = {True: "✅", False: "❌"}
     user_status_text = "Статус пользователя:\n"
@@ -1811,30 +708,21 @@ async def build_user_status_text(bot_user_id: str, status_dict: dict) -> str:
         status_image = status_images[value_bool]
         status_text = status_to_text_transcription[key]
         user_status_text += f"{status_image}{status_text}\n"
-
-    target_vacancy_name = get_target_vacancy_name_from_records(record_id=bot_user_id)
-    if target_vacancy_name: # not None
-        user_status_text += f"\nВакансия в работе: {target_vacancy_name}.\n"
     return user_status_text
-
 
 async def show_chat_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # ----- IDENTIFY USER and pull required data from records -----
     
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-    status_dict = await user_status(bot_user_id=bot_user_id)
-    status_text = await build_user_status_text(bot_user_id=bot_user_id, status_dict=status_dict)
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    status_dict = await user_status(applicant_user_id=applicant_user_id)
+    status_text = await build_user_status_text(status_dict=status_dict)
 
     status_to_button_transcription = {
         "bot_authorization": "Авторизация в боте",
         "privacy_policy_confirmation": "Обработка перс. данных",
-        "hh_authorization": "Авторизоваться на HeadHunter",
-        "vacancy_selection": "Выбрать вакансию",
-        "welcome_video_recording": "Записать приветственное видео",
-        "vacancy_description_recieved": "Запросить описание вакансии",
-        "sourcing_criterias_recieved": "Выработать критерии отбора",
-        "resume_records_file_not_empty": "Получить рекомендации",
+        "welcome_video_shown": "Посмотреть приветственное видео менеджера",
+        "resume_video_recorded": "Записать видео-визитку",
     }
     answer_options = []
     for key, value_bool in status_dict.items():
@@ -1909,21 +797,12 @@ async def handle_chat_menu_action(update: Update, context: ContextTypes.DEFAULT_
 
     if action == "bot_authorization":
         await start_command(update=update, context=context)
-    elif action == "privacy_policy_confirmation" or action == "privacy_policy":
+    elif action == "privacy_policy_confirmation":
         await ask_privacy_policy_confirmation_command(update=update, context=context)
-    elif action == "hh_authorization":
-        await hh_authorization_command(update=update, context=context)
-    elif action == "vacancy_selection":
-        await select_vacancy_command(update=update, context=context)
-    elif action == "welcome_video_recording":
+    elif action == "welcome_video_shown":
+        await show_welcome_video_command(update=update, context=context)
+    elif action == "resume_video_recorded":
         await ask_to_record_video_command(update=update, context=context)
-    elif action == "vacancy_description_recieved":
-        await read_vacancy_description_command(update=update, context=context)
-    elif action == "sourcing_criterias_recieved":
-        await define_sourcing_criterias_command(update=update, context=context)
-    elif action == "resume_records_file_not_empty":
-        bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
-        await recommend_resumes_with_video_command(bot_user_id=bot_user_id, application=context.application)
     else:
         logger.warning(f"Unknown action '{action}' from callback_code '{selected_callback_code}'. Available actions: bot_authorization, privacy_policy_confirmation, privacy_policy, hh_authorization, hh_auth, select_vacancy, record_video, get_recommendations")
         await send_message_to_user(update, context, text=FAIL_TECHNICAL_SUPPORT_TEXT)
@@ -1951,7 +830,7 @@ async def handle_feedback_message(update: Update, context: ContextTypes.DEFAULT_
     
     # ----- IDENTIFY USER and pull required data from records -----
 
-    bot_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
+    applicant_user_id = str(get_tg_user_data_attribute_from_update_object(update=update, tg_user_attribute="id"))
     
     # ----- CHECK FOR WAITING FOR FEEDBACK FLAG -----
 
@@ -1970,21 +849,27 @@ async def handle_feedback_message(update: Update, context: ContextTypes.DEFAULT_
     try:
         if context.application:
             # Get user info for admin message
-            user_records_path = get_users_records_file_path()
+            applicant_records_file_path = get_applicant_bot_records_file_path()
             user_info = ""
             try:
-                with open(user_records_path, "r", encoding="utf-8") as f:
-                    records = json.load(f)
-                    if is_user_in_records(record_id=bot_user_id):
-                        username = records[bot_user_id].get("username", "N/A")
-                        first_name = records[bot_user_id].get("first_name", "N/A")
-                        last_name = records[bot_user_id].get("last_name", "N/A")
-                        user_info = f"Пользователь: ID: {bot_user_id}, @{username}, {first_name} {last_name})"
+                with open(applicant_records_file_path, "r", encoding="utf-8") as f:
+                    applicant_records = json.load(f)
+                    if is_applicant_in_applicant_bot_records(applicant_record_id=applicant_user_id):
+                        manager_user_id = applicant_records[applicant_user_id].get("manager_user_id", "N/A")
+                        vacancy_id = applicant_records[applicant_user_id].get("vacancy_id", "N/A")
+                        resume_id = applicant_records[applicant_user_id].get("resume_id", "N/A")
+                        username = applicant_records[applicant_user_id].get("username", "N/A")
+                        first_name = applicant_records[applicant_user_id].get("first_name", "N/A")
+                        last_name = applicant_records[applicant_user_id].get("last_name", "N/A")
+                        user_info = (
+                            f"Вакансия: менеджер ID {manager_user_id}, вакансия {vacancy_id}, резюме {resume_id})",
+                            f"Соискатель: ID {applicant_user_id}, @{username}, {first_name} {last_name})"
+                        )
                     else:
-                        user_info = f"Пользователь ID: {bot_user_id}, не найден в records."
+                        user_info = f"Пользователь ID: {applicant_user_id}, не найден в applicant_bot_records."
             except Exception as e:
                 logger.error(f"Failed to get user info for feedback: {e}")
-                user_info = f"Пользователь ID: {bot_user_id}"
+                user_info = f"Пользователь ID: {applicant_user_id}"
             
             admin_message = f"⚠️  Обратная связь от пользователя\n\n{user_info}\n\nСообщение:\n{feedback_text}"
             await send_message_to_admin(
@@ -2042,14 +927,12 @@ async def handle_bottom_menu_buttons(update: Update, context: ContextTypes.DEFAU
 ########################################################################################
 
 
-def create_manager_application(token: str) -> Application:
+def create_applicant_application(token: str) -> Application:
     application = Application.builder().token(token).build()
-    application.add_handler(CallbackQueryHandler(handle_answer_select_vacancy, pattern=r"^\d+$"))
     application.add_handler(CallbackQueryHandler(handle_answer_video_record_request, pattern=r"^record_video_request:"))
     application.add_handler(CallbackQueryHandler(handle_answer_confrim_sending_video, pattern=r"^sending_video_confirmation:"))
     application.add_handler(CallbackQueryHandler(handle_answer_policy_confirmation, pattern=r"^privacy_policy_confirmation:"))
     application.add_handler(CallbackQueryHandler(handle_chat_menu_action, pattern=r"^menu_action:"))
-    application.add_handler(CallbackQueryHandler(handle_invite_to_interview_button, pattern=r"^invite_to_interview:"))
     menu_buttons_pattern = f"^({re.escape(BTN_MENU)}|{re.escape(BTN_FEEDBACK)})$"
     application.add_handler(
         MessageHandler(filters.TEXT & filters.Regex(menu_buttons_pattern), handle_bottom_menu_buttons)

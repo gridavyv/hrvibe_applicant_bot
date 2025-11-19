@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional, Callable, Awaitable
+from typing import List, Tuple, Optional
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.ext import ContextTypes

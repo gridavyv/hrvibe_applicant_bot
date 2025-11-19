@@ -3,12 +3,10 @@
 import os
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from telegram import Update
-from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +14,6 @@ logger = logging.getLogger(__name__)
 
 from services.constants import (
     DATA_DIR, 
-    USERS_RECORDS_FILENAME, 
-    RESUME_RECORDS_FILENAME,
-    BOT_FOR_APPLICANTS_USERNAME,
     APPLICANT_BOT_DATA_DIR,
     APPLICANT_BOT_RECORDS_FILENAME,
     )
@@ -89,7 +84,7 @@ def get_resume_id_from_applicant_bot_records(applicant_record_id: str) -> Option
         return None
 
 
-def get_vacancy_directory_(user_record_id: str, vacancy_id: str) -> Optional[Path]:
+def get_vacancy_directory(user_record_id: str, vacancy_id: str) -> Optional[Path]:
     # TAGS: [get_data],[directory_path],[applicant_bot_usage]
     """Get the directory path for vacancy data."""
     data_dir = Path(DATA_DIR)
@@ -108,7 +103,7 @@ def get_vacancy_directory_(user_record_id: str, vacancy_id: str) -> Optional[Pat
 def get_directory_for_video_from_applicants(user_record_id: str, vacancy_id: str) -> Optional[Path]:
     # TAGS: [get_data],[directory_path],[applicant_bot_usage]
     """Get the directory path for applicants videos."""
-    vacancy_data_dir = get_vacancy_directory_(user_record_id=user_record_id, vacancy_id=vacancy_id)
+    vacancy_data_dir = get_vacancy_directory(user_record_id=user_record_id, vacancy_id=vacancy_id)
     if vacancy_data_dir is None:
         logger.debug(f"Vacancy directory does not exist, cannot get video directory for bot_user_id: {user_record_id}, vacancy_id: {vacancy_id}")
         return None
@@ -124,7 +119,7 @@ def get_directory_for_video_from_applicants(user_record_id: str, vacancy_id: str
 def get_directory_for_video_from_managers(user_record_id: str, vacancy_id: str) -> Optional[Path]:
     # TAGS: [get_data],[directory_path],[applicant_bot_usage]
     """Get the directory path for managers videos."""
-    vacancy_data_dir = get_vacancy_directory_(user_record_id=user_record_id, vacancy_id=vacancy_id)
+    vacancy_data_dir = get_vacancy_directory(user_record_id=user_record_id, vacancy_id=vacancy_id)
     if vacancy_data_dir is None:
         logger.debug(f"Vacancy directory does not exist, cannot get video directory for bot_user_id: {user_record_id}, vacancy_id: {vacancy_id}")
         return None
@@ -162,59 +157,6 @@ def get_decision_status_from_selected_callback_code(selected_callback_code: str)
         return selected_callback_code.split(":")[-1].strip()
     else:
         return selected_callback_code
-
-
-def get_bot_user_id_from_collected_data(data: dict) -> Optional[str]:
-    """Get bot_user_id from collected dictionary. TAGS: [get_data]"""
-    if "tg_user_id" in data:
-        return str(data["tg_user_id"])
-    else:
-        logger.debug("'tg_user_id' not found in collected data.")
-        return None
-
-
-
-def get_path_to_video_from_applicant_from_resume_records(bot_user_id: str, vacancy_id: str, resume_record_id: str) -> Optional[Path]:
-    """Get path to video from applicant from resume records.
-    DO NOT CREATE, because APPLICANT BOT just reads.
-    Return none if does not exist."""
-    resume_records_file_path = get_resume_records_file_path(bot_user_id=bot_user_id, vacancy_id=vacancy_id)
-    if resume_records_file_path is None:
-        logger.debug(f"Resume records file path does not exist, cannot get video path for bot_user_id: {bot_user_id}, vacancy_id: {vacancy_id}, resume_record_id: {resume_record_id}")
-        return None
-    try:
-        # Read existing data
-        with open(resume_records_file_path, "r", encoding="utf-8") as f:
-            resume_records = json.load(f)
-        if resume_record_id in resume_records:
-            video_path = resume_records[resume_record_id].get("resume_video_path")
-            if video_path:
-                logger.debug(f"Video path '{video_path}' found for resume_record_id: {resume_record_id}")
-                return video_path
-            else:
-                logger.debug(f"Video path not set for resume_record_id: {resume_record_id}")
-                return None
-        else:
-            logger.debug(f"Resume record '{resume_record_id}' not found in resume records file")
-            return None
-    except Exception as e:
-        logger.error(f"Error reading resume records file {resume_records_file_path}: {e}")
-        return None
-
-
-def get_reply_from_update_object(update: Update):
-    # TAGS: [get_data],[applicant_bot_usage]
-    """ Get user reply to from the update object if user did one of below.
-    1. sent message (text, photo, video, etc.) - update.message OR
-    2. clicked button - update.callback_query.message
-    If none of the above, return None
-    """
-    if update.message:
-        return update.message.reply_text
-    elif update.callback_query and update.callback_query.message:
-        return update.callback_query.message.reply_text
-    else:
-        return None
 
 
 
@@ -268,9 +210,9 @@ def create_applicant_bot_records(applicant_record_id: str) -> None:
         }
 
         applicant_bot_records_file_path.write_text(json.dumps(applicant_bot_records, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info(f"{applicant_bot_records_file_path} has been successfully created with new resume_record: {applicant_record_id_str}")
+        logger.info(f"{applicant_bot_records_file_path} has been successfully created with new resume_record: {applicant_record_id}")
     else:
-        logger.debug(f"Skipping create: {applicant_record_id_str} already exists in the file {applicant_bot_records_file_path}")
+        logger.debug(f"Skipping create: {applicant_record_id} already exists in the file {applicant_bot_records_file_path}")
 
 
 # ****** METHODS with TAGS: [update_data] ******
@@ -292,124 +234,101 @@ def update_applicant_bot_records_with_top_level_key(applicant_record_id: str, ke
 
 
 
-
-
-
-
-
-def get_persistent_keyboard_messages(bot_user_id: str) -> list[tuple[int, int]]:
+def get_persistent_keyboard_messages(applicant_record_id: str) -> list[tuple[int, int]]:
     """Get persistent keyboard message IDs for a user. Returns list of (chat_id, message_id) tuples. TAGS: [get_data]"""
-    users_records_file_path = get_users_records_file_path()
-    if users_records_file_path is None:
-        logger.debug(f"Users records file path does not exist, cannot get persistent keyboard messages for bot_user_id: {bot_user_id}")
+    applicant_bot_records_file_path = get_applicant_bot_records_file_path()
+    if applicant_bot_records_file_path is None:
+        logger.debug(f"Applicant bot records file path does not exist, cannot get persistent keyboard messages for bot_user_id: {applicant_record_id}")
         return []
     try:
-        with open(users_records_file_path, "r", encoding="utf-8") as f:
-            records = json.load(f)
-        if bot_user_id in records:
-            keyboard_messages = records[bot_user_id].get("messages_with_keyboards", [])
+        with open(applicant_bot_records_file_path, "r", encoding="utf-8") as f:
+            applicant_records = json.load(f)
+        if applicant_record_id in applicant_records:
+            keyboard_messages = applicant_records[applicant_record_id].get("messages_with_keyboards", [])
             # Convert list of lists to list of tuples
             result = [tuple(msg) for msg in keyboard_messages if isinstance(msg, (list, tuple)) and len(msg) == 2]
-            logger.debug(f"Found {len(result)} persistent keyboard messages for bot_user_id: {bot_user_id}")
+            logger.debug(f"Found {len(result)} persistent keyboard messages for bot_user_id: {applicant_record_id}")
             return result
-        logger.debug(f"User {bot_user_id} not found in records")
+        logger.debug(f"User {applicant_record_id} not found in records")
         return []
     except Exception as e:
-        logger.error(f"Error reading keyboard messages for {bot_user_id}: {e}")
+        logger.error(f"Error reading keyboard messages for {applicant_record_id}: {e}")
         return []
 
 
-def add_persistent_keyboard_message(bot_user_id: str, chat_id: int, message_id: int) -> None:
+def add_persistent_keyboard_message(applicant_record_id: str, chat_id: int, message_id: int) -> None:
     # TAGS: [update_data]
     """Add a keyboard message ID to persistent storage."""
-    users_records_file_path = get_users_records_file_path()
-    if users_records_file_path is None:
-        logger.debug(f"Users records file path does not exist, cannot add persistent keyboard message for bot_user_id: {bot_user_id}")
+    applicant_bot_records_file_path = get_applicant_bot_records_file_path()
+    if applicant_bot_records_file_path is None:
+        logger.debug(f"Users records file path does not exist, cannot add persistent keyboard message for bot_user_id: {applicant_record_id}")
         return
     try:
-        with open(users_records_file_path, "r", encoding="utf-8") as f:
-            records = json.load(f)
+        with open(applicant_bot_records_file_path, "r", encoding="utf-8") as f:
+            applicant_records = json.load(f)
         
-        bot_user_id_str = str(bot_user_id)
-        if bot_user_id_str not in records:
-            logger.debug(f"User {bot_user_id_str} not found in records, cannot track keyboard")
+        if applicant_record_id not in applicant_records:
+            logger.debug(f"User {applicant_record_id} not found in records, cannot track keyboard")
             return
         
-        if "messages_with_keyboards" not in records[bot_user_id_str]:
-            records[bot_user_id_str]["messages_with_keyboards"] = []
+        if "messages_with_keyboards" not in applicant_records[applicant_record_id]:
+            applicant_records[applicant_record_id]["messages_with_keyboards"] = []
         
         # Add if not already present
-        keyboard_messages = records[bot_user_id_str]["messages_with_keyboards"]
+        keyboard_messages = applicant_records[applicant_record_id]["messages_with_keyboards"]
         if [chat_id, message_id] not in keyboard_messages:
             keyboard_messages.append([chat_id, message_id])
-            records[bot_user_id_str]["messages_with_keyboards"] = keyboard_messages
-            users_records_file_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.debug(f"Added keyboard message {message_id} to persistent storage for user {bot_user_id_str}")
+            applicant_records[applicant_record_id]["messages_with_keyboards"] = keyboard_messages
+            applicant_bot_records_file_path.write_text(json.dumps(applicant_records, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"Added keyboard message {message_id} to persistent storage for user {applicant_record_id}")
     except Exception as e:
         logger.error(f"Error adding keyboard message to persistent storage: {e}")
 
 
-def remove_persistent_keyboard_message(bot_user_id: str, chat_id: int, message_id: int) -> None:
+def remove_persistent_keyboard_message(applicant_record_id: str, chat_id: int, message_id: int) -> None:
     # TAGS: [update_data]
     """Remove a keyboard message ID from persistent storage."""
-    users_records_file_path = get_users_records_file_path()
-    if users_records_file_path is None:
-        logger.debug(f"Users records file path does not exist, cannot remove persistent keyboard message for bot_user_id: {bot_user_id}")
+    applicant_bot_records_file_path = get_applicant_bot_records_file_path()
+    if applicant_bot_records_file_path is None:
+        logger.debug(f"Users records file path does not exist, cannot remove persistent keyboard message for bot_user_id: {applicant_record_id}")
         return
     try:
-        with open(users_records_file_path, "r", encoding="utf-8") as f:
-            records = json.load(f)
+        with open(applicant_bot_records_file_path, "r", encoding="utf-8") as f:
+            applicant_records = json.load(f)
         
-        bot_user_id_str = str(bot_user_id)
-        if bot_user_id_str not in records:
-            logger.debug(f"User {bot_user_id_str} not found in records, cannot remove keyboard message")
+        if applicant_record_id not in applicant_records:
+            logger.debug(f"User {applicant_record_id} not found in records, cannot remove keyboard message")
             return
         
-        if "messages_with_keyboards" in records[bot_user_id_str]:
-            keyboard_messages = records[bot_user_id_str]["messages_with_keyboards"]
-            records[bot_user_id_str]["messages_with_keyboards"] = [
+        if "messages_with_keyboards" in applicant_records[applicant_record_id]:
+            keyboard_messages = applicant_records[applicant_record_id]["messages_with_keyboards"]
+            applicant_records[applicant_record_id]["messages_with_keyboards"] = [
                 msg for msg in keyboard_messages if not (msg[0] == chat_id and msg[1] == message_id)
             ]
-            users_records_file_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.debug(f"Removed keyboard message {message_id} from persistent storage for user {bot_user_id_str}")
+            applicant_bot_records_file_path.write_text(json.dumps(applicant_records, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"Removed keyboard message {message_id} from persistent storage for user {applicant_record_id}")
     except Exception as e:
         logger.error(f"Error removing keyboard message from persistent storage: {e}")
 
 
-def clear_all_persistent_keyboard_messages(bot_user_id: str) -> None:
+def clear_all_persistent_keyboard_messages(applicant_record_id: str) -> None:
     # TAGS: [update_data]
     """Clear all persistent keyboard messages for a user. """
-    users_records_file_path = get_users_records_file_path()
-    if users_records_file_path is None:
-        logger.debug(f"Users records file path does not exist, cannot clear persistent keyboard messages for bot_user_id: {bot_user_id}")
+    applicant_bot_records_file_path = get_applicant_bot_records_file_path()
+    if applicant_bot_records_file_path is None:
+        logger.debug(f"Users records file path does not exist, cannot clear persistent keyboard messages for bot_user_id: {applicant_record_id}")
         return
     try:
-        with open(users_records_file_path, "r", encoding="utf-8") as f:
-            records = json.load(f)
+        with open(applicant_bot_records_file_path, "r", encoding="utf-8") as f:
+            applicant_records = json.load(f)
         
-        bot_user_id_str = str(bot_user_id)
-        if bot_user_id_str in records:
-            records[bot_user_id_str]["messages_with_keyboards"] = []
-            users_records_file_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.debug(f"Cleared all persistent keyboard messages for user {bot_user_id_str}")
+        if applicant_record_id in applicant_records:
+            applicant_records[applicant_record_id]["messages_with_keyboards"] = []
+            applicant_bot_records_file_path.write_text(json.dumps(applicant_records, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"Cleared all persistent keyboard messages for user {applicant_record_id}")
         else:
-            logger.debug(f"User {bot_user_id_str} not found in records, cannot clear keyboard messages")
+            logger.debug(f"User {applicant_record_id} not found in records, cannot clear keyboard messages")
     except Exception as e:
         logger.error(f"Error clearing persistent keyboard messages: {e}")       
 
 
-
-
-
-
-
-
-
-
-
-# ****** METHODS with TAGS: [format_data] ******
-
-def format_oauth_link_text(oauth_link: str) -> str:
-    # TAGS: [format_data]
-    """Format oauth link text. TAGS: [format_data]"""
-    return f"<a href=\"{oauth_link}\">Ссылка для авторизации</a>"

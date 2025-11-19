@@ -4,16 +4,10 @@ import os
 from dotenv import load_dotenv
 
 from applicant_bot import (
-    create_manager_application, 
-    ai_task_queue, 
+    create_applicant_application, 
     start_command, 
-    admin_get_list_of_users_command,
-    admin_update_negotiations_command,
-    admin_get_fresh_resumes_command,
-    admin_anazlyze_and_sort_resumes_command,
-    admin_status_of_applicants_video_command,
-    admin_recommend_applicants_with_video_command,
-    admin_send_message_to_user_command,
+    admin_get_list_of_applicants_command,
+    admin_send_message_to_applicant_command,
 )
 
 from services.data_service import (
@@ -37,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ----------- SETUP OF MENU with buttons that constantly persistent for user -----------
 
 # Use 'ReplyKeyboardMarkup' to show buttons all the time
-MANAGER_MENU_KB = ReplyKeyboardMarkup(
+BOTTOM_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(BTN_MENU), KeyboardButton(BTN_FEEDBACK)]
     ],
@@ -45,12 +39,12 @@ MANAGER_MENU_KB = ReplyKeyboardMarkup(
     is_persistent=True,
 )
 
-async def _show_manager_menu_on_start(update, context: ContextTypes.DEFAULT_TYPE):
+async def _show_bottom_menu_on_start(update, context: ContextTypes.DEFAULT_TYPE):
     """Handler to show manager menu when /start command executed"""
     if update.effective_message:
 
         # Show the bottom menu keyboard
-        await update.effective_message.reply_text(WELCOME_TEXT_WHEN_STARTING_BOT, reply_markup=MANAGER_MENU_KB)
+        await update.effective_message.reply_text(WELCOME_TEXT_WHEN_STARTING_BOT, reply_markup=BOTTOM_MENU_KB)
 
         # Call the main start_command from applicant_bot
         await start_command(update, context)
@@ -63,32 +57,20 @@ load_dotenv()
 # set up global flag that helps to avoid multiple shutdown signals (which might screw up the shutdown sequence)
 _shutting_down = False
 
-async def run_manager_bot() -> None:
-    """Starts
-    1) the manager bot
-    2) task queue worker for AI related tasks"""
+async def run_applicant_bot() -> None:
+    """Starts the applicant bot"""
     
     global _shutting_down
 
     # ------------- SETUP OF THE APPLICATION -------------
 
-    manager_token = os.getenv("TELEGRAM_APPLICANT_BOT_TOKEN")
-    if not manager_token:
+    applicant_token = os.getenv("TELEGRAM_APPLICANT_BOT_TOKEN")
+    if not applicant_token:
         raise RuntimeError("TELEGRAM_APPLICANT_BOT_TOKEN not found in environment variables")
-    application = create_manager_application(manager_token)
-    application.add_handler(CommandHandler("start", _show_manager_menu_on_start), group=-1)
-    application.add_handler(CommandHandler("admin_get_list_of_users", admin_get_list_of_users_command))
-    application.add_handler(CommandHandler("admin_update_negotiations", admin_update_negotiations_command))
-    application.add_handler(CommandHandler("admin_get_fresh_resumes", admin_get_fresh_resumes_command))
-    application.add_handler(CommandHandler("admin_analyze_and_sort_resumes", admin_anazlyze_and_sort_resumes_command))
-    application.add_handler(CommandHandler("admin_status_of_applicants_video", admin_status_of_applicants_video_command))
-    application.add_handler(CommandHandler("admin_recommend", admin_recommend_applicants_with_video_command))
-    application.add_handler(CommandHandler("admin_send_message", admin_send_message_to_user_command))
-    
-    # ------------- STARTING OF THE TASK QUEUE WORKER for AI related tasks-------------
-
-    ai_task_queue.start_worker()
-    logger.info("Task queue worker to process AI related tasks is started.")
+    application = create_applicant_application(applicant_token)
+    application.add_handler(CommandHandler("start", _show_bottom_menu_on_start), group=-1)
+    application.add_handler(CommandHandler("admin_get_list_of_applicants", admin_get_list_of_applicants_command))
+    application.add_handler(CommandHandler("admin_send_message_to_applicant", admin_send_message_to_applicant_command))
     
     # ------------- INITIALIZATION AND STARTING OF THE APPLICATION -------------
 
@@ -115,15 +97,6 @@ async def run_manager_bot() -> None:
         if _shutting_down:
             logger.info("\nApplication is shutting down gracefully...")
 
-            # ------------- SHUTDOWN OF THE TASK QUEUE WORKER for AI related tasks -------------
-
-            try:
-                # Stop task queue worker that processes AI related tasks
-                await ai_task_queue.stop_worker(wait=True)
-                logger.info("Task queue worker that processes AI related tasks is stopped.")
-            except Exception as e:
-                logger.error(f"Error stopping task queue worker that processes AI related tasks: {e}")
-            
             # ------------- SHUTDOWN OF THE APPLICATION in proper sequence -------------  
             
             try:
@@ -164,7 +137,7 @@ def main():
     try:
         #use "asyncio.run" to start the asynchronous function run_manager_bot() from synchronous main() function
         # this will create new event loop => process all asynchronous tasks in the background => close the event loop after completion
-        asyncio.run(run_manager_bot())
+        asyncio.run(run_applicant_bot())
     except KeyboardInterrupt:
         logger.info("\nTelegram Bot for Managers has been stopped by user.")
 
